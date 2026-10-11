@@ -1,7 +1,7 @@
 # Architektura
 
 > Ostatnia aktualizacja: 2026-10-11
-> Obowiązujący zakres kodu: etapy 0–8. Domyślna ścieżka CLI nadal generuje konkretne twierdzenia etapu 1.
+> Obowiązujący zakres kodu: etapy 0–8. Domyślna ścieżka CLI nadal generuje konkretne twierdzenia etapu 1. Osobna pętla z SQLite jest w `docs/continuous-ai-architecture.md` i nie zmienia tego kontraktu.
 
 Generator składa twierdzenia jako drzewo, a nie jako sklejany tekst. Lean dostaje dopiero gotowy, wąski fragment języka i sam sprawdza dowód.
 
@@ -107,3 +107,5 @@ Cztery werdykty eksploracji są rozłączne: cytowanie lematu, kontrprzykład, b
 ## Rozszerzanie
 
 Nowa konstrukcja powinna dostać wariant drzewa, test typowania, test eksportu i test Leana. Nie należy zmieniać po cichu konkretnych twierdzeń etapu 1 ani złotego pliku `lean/TheoremGen/Generated.lean`.
+
+Pętla `theorem_gen.learn` dokłada kolejkę, checkpoint i status wyprowadzony z Leana. Jej opis, bramki curriculum i budżet RAM są w `docs/continuous-ai-architecture.md`.

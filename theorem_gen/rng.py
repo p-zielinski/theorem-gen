@@ -15,6 +15,14 @@ class LCG:
             raise ValueError("seed must be an int")
         self._state = seed % self.MODULUS
 
+    def get_state(self) -> int:
+        return self._state
+
+    def set_state(self, state: int) -> None:
+        if isinstance(state, bool) or not isinstance(state, int):
+            raise ValueError("state must be an int")
+        self._state = state % self.MODULUS
+
     def next_u32(self) -> int:
         self._state = (self.MULTIPLIER * self._state + self.INCREMENT) % self.MODULUS
         return self._state

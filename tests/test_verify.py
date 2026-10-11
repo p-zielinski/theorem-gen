@@ -38,6 +38,37 @@ class VerifyTests(unittest.TestCase):
         self.assertIn("exit code 0", report.message)
         self.assertEqual(exit_code_for(report), 0)
 
+    def test_non_proposition_is_typing_even_with_definitional_text(self):
+        stderr = (
+            "error: Not a definitional equality: the conclusion should be an equality, but is `Nat`\n"
+            "error: Type mismatch\n"
+            "error: type of theorem `bad` is not a proposition\n"
+            "  Nat\n"
+        )
+        report = self.verify("theorem bad : Nat := rfl\n", lambda *args: (1, "", stderr))
+        self.assertEqual(report.failure_class, "typing")
+
+    def test_lean_syntax_phrases_beat_an_unsolved_goal(self):
+        end = self.verify(
+            "theorem bad : (0 = 0) := \n",
+            lambda *args: (1, "", "error: unexpected end of input\n"),
+        )
+        garbage = self.verify(
+            "this is not lean\n",
+            lambda *args: (1, "", "error: unexpected identifier; expected command\n"),
+        )
+        mixed = self.verify(
+            "theorem bad : (0 = 0) := by\n  ???\n",
+            lambda *args: (
+                1,
+                "",
+                "error: unsolved goals\n⊢ 0 = 0\nerror: unexpected token '?'; expected 'binder_predicate'\n",
+            ),
+        )
+        self.assertEqual(end.failure_class, "syntax")
+        self.assertEqual(garbage.failure_class, "syntax")
+        self.assertEqual(mixed.failure_class, "syntax")
+
     def test_definitional_failure_is_a_proof_failure_despite_type_mismatch_text(self):
         stderr = (
             "error: Not a definitional equality: the left-hand side\n"

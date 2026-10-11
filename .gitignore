@@ -4,3 +4,4 @@ __pycache__/
 lean/.lake/
 lean/TheoremGen/Scratch.lean
 .DS_Store
+var/

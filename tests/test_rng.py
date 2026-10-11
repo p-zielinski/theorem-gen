@@ -34,6 +34,16 @@ class LcgTests(unittest.TestCase):
         rng = LCG(1)
         self.assertEqual([rng.randint(0, 9) for _ in range(5)], [8, 7, 8, 5, 2])
 
+    def test_state_round_trip_restores_the_next_draw(self):
+        rng = LCG(1)
+        rng.next_u32()
+        state = rng.get_state()
+        restored = LCG(0)
+        restored.set_state(state)
+        self.assertEqual(restored.next_u32(), rng.next_u32())
+        with self.assertRaises(ValueError):
+            LCG(1).set_state(True)
+
     def test_singleton_span_still_consumes_a_draw(self):
         rng = LCG(1)
         self.assertEqual(rng.randint(3, 3), 3)

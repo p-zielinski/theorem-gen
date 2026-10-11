@@ -52,14 +52,29 @@ def exit_code_for(report: VerificationReport) -> int:
 
 
 def classify_lean_failure(text: str) -> str:
+    # Lean also says "Not a definitional equality" when the theorem type is
+    # not a proposition. That is a typing error, and it must win over the
+    # proof bucket so the statement is not left unresolved.
+    if "is not a proposition" in text:
+        return "typing"
+    # Syntax wins over "unsolved goals": Lean reports both when a tactic token
+    # does not parse. "unexpected end of input" and "expected command" are the
+    # phrases Lean 4.34.1 actually emits for a broken file.
+    if (
+        "unexpected end of input" in text
+        or "unexpected token" in text
+        or "unexpected identifier" in text
+        or "expected command" in text
+        or "expected term" in text
+        or "expected token" in text
+    ):
+        return "syntax"
     if (
         "Not a definitional equality" in text
         or "unsolved goals" in text
         or "proved that the proposition" in text
     ):
         return "proof"
-    if "unexpected token" in text or "expected term" in text or "expected token" in text:
-        return "syntax"
     if (
         "failed to synthesize" in text
         or "synthInstanceFailed" in text

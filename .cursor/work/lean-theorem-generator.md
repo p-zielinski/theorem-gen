@@ -56,9 +56,7 @@ Generator tworzy twierdzenia jako struktury, eksportuje je do wąskiego podzbior
 ## Next steps
 
 1. Nie zaczynać kolejnego etapu w tej serii. Etapy 0–8 są zamknięte.
-2. Gotowe prompty (tylko dokumenty, bez implementacji AI/SQLite):
-   - `docs/prompts/audit-lean-generator.md`
-   - `docs/prompts/build-continuous-lean-ai.md`
+2. Osobna pętla SQLite + Lean jest w `.cursor/work/continuous-lean-ai.md`. Nie przepisuje generatora 0–8.
 
 ## Blockers / open questions
 
