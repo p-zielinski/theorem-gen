@@ -1,0 +1,6 @@
+name = "TheoremGen"
+version = "0.1.0"
+defaultTargets = ["TheoremGen"]
+
+[[lean_lib]]
+name = "TheoremGen"

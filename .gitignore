@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.toolchains/
+lean/.lake/
+lean/TheoremGen/Scratch.lean
+.DS_Store
