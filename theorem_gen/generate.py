@@ -99,13 +99,13 @@ def _exceeds_max_value(statement: Compare, config: GeneratorConfig) -> bool:
 
 
 def _within_complexity(statement: Compare, dependencies: tuple, config: GeneratorConfig) -> bool:
-    from theorem_gen.complexity import measure_expr, within_bounds
+    from theorem_gen.complexity import candidate_within_bounds
 
-    measures = measure_expr(statement)
-    measures["dependencies"] = len(dependencies)
-    if dependencies:
-        measures["definitions"] = len(dependencies)
-    return within_bounds(measures, config.complexity_bounds)
+    return candidate_within_bounds(
+        config.complexity_bounds,
+        statement=statement,
+        dependencies=dependencies,
+    )
 
 
 def _literal(rng: LCG, config: GeneratorConfig) -> int:

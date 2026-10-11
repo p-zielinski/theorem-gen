@@ -46,6 +46,29 @@ def within_bounds(measures: dict, bounds: dict) -> bool:
     return True
 
 
+def candidate_within_bounds(
+    bounds: dict,
+    *,
+    statement=None,
+    dependencies: tuple = (),
+    theorem=None,
+    registry=None,
+) -> bool:
+    """Shared filter for concrete and general generation.
+
+    Concrete candidates pass a statement plus optional dependency ids.
+    General candidates pass a theorem and reuse `measure_theorem`.
+    """
+    if theorem is not None:
+        measures = measure_theorem(theorem, registry)
+    else:
+        measures = measure_expr(statement)
+        measures["dependencies"] = len(dependencies)
+        if dependencies:
+            measures["definitions"] = len(dependencies)
+    return within_bounds(measures, bounds)
+
+
 def _size(expr: object) -> int:
     if isinstance(expr, (NatLit, IntLit, Var)):
         return 1

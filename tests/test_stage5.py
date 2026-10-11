@@ -6,7 +6,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from theorem_gen.complexity import measure_expr, measure_theorem
+from theorem_gen.complexity import candidate_within_bounds, measure_expr, measure_theorem
 from theorem_gen.config import GeneratorConfig
 from theorem_gen.definitions import (
     double_definition,
@@ -22,6 +22,34 @@ from theorem_gen.generate import generate
 
 
 class ComplexityTests(unittest.TestCase):
+    def test_shared_complexity_filter_matches_both_generators(self):
+        statement = generate(
+            GeneratorConfig(seed=1, count=1, rules=("add_zero",))
+        )[0].statement
+        self.assertTrue(
+            candidate_within_bounds(
+                {"ast_size": (5, 5)},
+                statement=statement,
+                dependencies=(),
+            )
+        )
+        self.assertFalse(
+            candidate_within_bounds(
+                {"ast_size": (1, 2)},
+                statement=statement,
+                dependencies=(),
+            )
+        )
+        theorem = generate_general(
+            GeneratorConfig(seed=1, count=1, rules=("add_zero_all",))
+        )[0]
+        self.assertTrue(
+            candidate_within_bounds({"variables": (1, 1)}, theorem=theorem)
+        )
+        self.assertFalse(
+            candidate_within_bounds({"variables": (4, 5)}, theorem=theorem)
+        )
+
     def test_literal_magnitude_is_not_a_measure(self):
         small = measure_expr(NatLit(1))
         huge = measure_expr(NatLit(10**12))

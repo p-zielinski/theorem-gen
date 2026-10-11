@@ -1,7 +1,7 @@
 # Ewolucyjny generator twierdzeń Lean 4
 
 > Last updated: 2026-10-11
-> Branch: `main` (zmiany etapów 0–8 są niezacommitowane)
+> Branch: `main`
 > Status: done
 
 ## Problem & goal
@@ -11,7 +11,7 @@ Generator tworzy twierdzenia jako struktury, eksportuje je do wąskiego podzbior
 ## Scope
 
 - **In scope:** etapy 0–8 według `docs/stages.md`.
-- **Out of scope:** Mathlib, pełny parser Leana, trwały rejestr na dysku, nowe zależności Pythona, commit (użytkownik o niego nie prosił).
+- **Out of scope:** Mathlib, pełny parser Leana, trwały rejestr na dysku, nowe zależności Pythona.
 
 ## Key files & context
 
@@ -39,6 +39,7 @@ Generator tworzy twierdzenia jako struktury, eksportuje je do wąskiego podzbior
 - 2026-10-11: Eksploracja ma cztery szablony. `no_proof`, `refuted` i `unprovable_in_fragment` są rozłączne. Status `proved` w eksploracji oznacza cytowanie lematu; plik Lean i tak jest sprawdzany osobno.
 - 2026-10-11: Komunikat Leana `decide` „proved that the proposition … is false” jest klasą `proof`.
 - 2026-10-11: Granice złożoności obejmują wszystkie sześć miar. `variables` wybiera zdanie ogólne, a `dependencies` i `definitions` wymagają jawnej reguły `use_definition`, spoza domyślnego zestawu.
+- 2026-10-11: Po audycie: poprawiono komunikat nieznanego `kind` w eksporcie; wspólny filtr `candidate_within_bounds`; README/architecture wyjaśniają trzy znaczenia `proved`.
 
 ## Progress
 
@@ -55,7 +56,9 @@ Generator tworzy twierdzenia jako struktury, eksportuje je do wąskiego podzbior
 ## Next steps
 
 1. Nie zaczynać kolejnego etapu w tej serii. Etapy 0–8 są zamknięte.
-2. Commit tylko na prośbę użytkownika.
+2. Gotowe prompty (tylko dokumenty, bez implementacji AI/SQLite):
+   - `docs/prompts/audit-lean-generator.md`
+   - `docs/prompts/build-continuous-lean-ai.md`
 
 ## Blockers / open questions
 
@@ -71,4 +74,4 @@ python3 -m compileall -q theorem_gen tests
 git diff --check
 ```
 
-Wynik: 133 testy `OK`. Zestaw obejmuje każdy schemat ogólny z dowodem sprawdzony przez Lean, odrzucenie źle otypowanego argumentu stałej i atomu, timeout hipotezy oraz rejestr z zależnością dopisaną w tej samej partii. CLI `verification: proved`. `lake build` przechodzi w teście pakietu. Raport zbiorczy poleceń: `docs/stage-8.md`.
+Wynik: 134 testy `OK` (po poprawkach poaudytowych). CLI `verification: proved`, golden `Generated.lean` zgodny. Raport zbiorczy: `docs/stage-8.md`.

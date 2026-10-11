@@ -98,6 +98,12 @@ Konkretny generator nie losuje zmiennych. Ogólne zdania powstają w `generate_g
 
 Cztery werdykty eksploracji są rozłączne: cytowanie lematu, kontrprzykład, brak dowodu oraz brak reguły dla atomu w tym fragmencie. Timeout procesu Leana pozostaje wynikiem nierozstrzygniętym i nie jest fałszem.
 
+`ExplorationResult.status == "proved"` oznacza tylko cytowanie lematu
+(`discovered=False`). To nie jest `claimed_true` i nie zastępuje
+`VerificationReport.status` po `verify_source`. Filtr złożoności dla
+`generate` i `generate_general` idzie przez wspólne
+`complexity.candidate_within_bounds`.
+
 ## Rozszerzanie
 
 Nowa konstrukcja powinna dostać wariant drzewa, test typowania, test eksportu i test Leana. Nie należy zmieniać po cichu konkretnych twierdzeń etapu 1 ani złotego pliku `lean/TheoremGen/Generated.lean`.

@@ -97,7 +97,10 @@ def export_theorem(theorem: Theorem) -> str:
         return _export_quantified(theorem, conditional=False)
     if kind == "conditional":
         return _export_quantified(theorem, conditional=True)
-    raise ExportError(f"only concrete theorems can be exported, got {kind}")
+    raise ExportError(
+        f"unsupported theorem kind for export: {kind} "
+        "(supported: concrete, universal, conditional, expression)"
+    )
 
 
 def export_definition(definition) -> str:

@@ -75,8 +75,23 @@ lake build
 - `docs/architecture.md` — moduły i kontrakt weryfikacji
 - `docs/stage-1.md` … `docs/stage-8.md` — raporty etapów
 - `docs/stages.md` — kryteria ukończenia
+- `docs/prompts/audit-lean-generator.md` — prompt niezależnego audytu etapów 0–8
+- `docs/prompts/build-continuous-lean-ai.md` — prompt ciągłego AI + SQLite + Lean
 
 Poza CLI dostępne są zdania ogólne (`generate_general`), definicja `double`,
 ocena hipotez (`assess_hypothesis`) i eksploracja czterech szablonów
 (`explore`). Brak dowodu, kontrprzykład i brak reguły we fragmencie to osobne
 wyniki.
+
+Słowo `proved` ma trzy różne znaczenia — nie wolno ich mieszać:
+
+| Gdzie | Znaczenie |
+|-------|-----------|
+| `VerificationReport.status` | Lean zaakceptował plik |
+| `HypothesisAssessment.status` | ocena hipotezy po Lean / kontrprzykładzie |
+| `ExplorationResult.status` | cytowanie zarejestrowanego lematu |
+
+`ExplorationResult.status == "proved"` **nie** jest `claimed_true`. Eksport z
+`theorem_from_proved` zostaje `unverified`, dopóki Lean nie sprawdzi pliku.
+`claimed_true(theorem)` wymaga `verification == "proved"` **oraz** niepustego
+dowodu.

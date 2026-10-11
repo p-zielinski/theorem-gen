@@ -65,9 +65,9 @@ def generate_general(config: GeneratorConfig) -> list:
 
 
 def _within_complexity(theorem, config: GeneratorConfig) -> bool:
-    from theorem_gen.complexity import measure_theorem, within_bounds
+    from theorem_gen.complexity import candidate_within_bounds
 
-    return within_bounds(measure_theorem(theorem), config.complexity_bounds)
+    return candidate_within_bounds(config.complexity_bounds, theorem=theorem)
 
 
 def _meta(seed: int, index: int, kind: str, rule: str) -> Metadata:

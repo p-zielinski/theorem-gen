@@ -46,7 +46,7 @@ git diff --check
 ## 4. Wyniki
 
 ```text
-Ran 133 tests
+Ran 134 tests
 OK
 
 generated 8 theorems
@@ -68,7 +68,7 @@ explore_0003 unprovable_in_fragment witness=() deps=()
 
 ## 5. Ograniczenia
 
-Eksploracja ma cztery szablony, nie dowolną przestrzeń zdań. Status `proved` w wyniku eksploracji oznacza, że pasuje zarejestrowany lemat; twierdzenie w eksporcie i tak czeka na Leana. System nie obiecuje rozstrzygnięcia zdań spoza tych szablonów. Brak dowodu, fałsz i niedowodliwość we fragmencie pozostają trzema różnymi wynikami.
+Eksploracja ma cztery szablony, nie dowolną przestrzeń zdań. Status `proved` w wyniku eksploracji oznacza, że pasuje zarejestrowany lemat; twierdzenie w eksporcie i tak czeka na Leana. To **nie** jest `claimed_true(theorem)` — patrz też tabela w `README.md`. System nie obiecuje rozstrzygnięcia zdań spoza tych szablonów. Brak dowodu, fałsz i niedowodliwość we fragmencie pozostają trzema różnymi wynikami.
 
 ## 6. Ocena kryteriów
 

@@ -109,8 +109,11 @@ theorem gen_s1_0001 : (2 <= 5) := by
             export_theorem(theorem(statement, Proof("rfl"), identifier="1bad"))
         with self.assertRaises(ExportError):
             export_theorem(theorem(statement, Proof("rfl"), identifier="theorem"))
-        with self.assertRaises(ExportError):
+        with self.assertRaises(ExportError) as caught:
             export_theorem(theorem(statement, Proof("rfl"), kind="forall"))
+        self.assertIn("unsupported theorem kind for export: forall", str(caught.exception))
+        self.assertIn("concrete, universal, conditional, expression", str(caught.exception))
+        self.assertNotIn("only concrete theorems can be exported", str(caught.exception))
 
     def test_sorry_is_not_a_proof_method(self):
         with self.assertRaises(TheoremError):
