@@ -19,7 +19,7 @@ The loop must be stoppable and resumable: proposal → Lean 4 → status → SQL
 | Area | Path | Role |
 |------|------|------|
 | Architecture | `docs/continuous-ai-architecture.md` | Loop, statuses, gates, RAM |
-| Schema | `docs/continuous-ai-schema.sql` | Concatenated migrations 001–010 |
+| Schema | `docs/continuous-ai-schema.sql` | Concatenated migrations 001–013 |
 | Audit | `docs/continuous-ai-audit.md` | Verdict and the acceptance matrix |
 | Report | `docs/continuous-ai-report.md` | Commands from that pass |
 | Memory | `docs/continuous-ai-memory.md` | Control-plane RSS |
@@ -54,13 +54,15 @@ The loop must be stoppable and resumable: proposal → Lean 4 → status → SQL
 - 2026-10-12: On the page, columns 1–4 name the proof shape (`decide`, `rfl`, `lemma`, `rewrite`). The header says "Curriculum lesson N of 7", so they are not confused with the generator's lessons.
 - 2026-10-12: Model attempts on the page have 10-minute windows and a better/weaker/same sentence. The time is `created_at` of the stored equation. `queued` does not enter the share.
 - 2026-10-12: "Still to read" was `proved`, `held_out=0`, and `id` greater than `lm_state.cursor_id`. That was the same number as `_untrained`. An own equation waited until it hit 0. One weight refresh read 4 such sentences. Later the same day the cursor was changed to stop at the first open check, and writing no longer waits for an empty pile.
-- 2026-10-12: The clock "Time until it may write" was `unread / the rate unread shrank` over the last minute in the browser. New `proved` rows were already in that rate. The first 20 seconds showed Measuring. The card was later retitled "Time to finish this read" and is no longer the writing condition.
+- 2026-10-12: The clock "Time until it may write" was `unread / the rate unread shrank` over the last minute in the browser. New `proved` rows were already in that rate. The first 20 seconds showed Measuring. The card was later retitled "Time to finish this read" and is no longer the writing condition. The same day the clock was removed. The remaining count is "New material": proved sentences the first read has not reached. Replay is not in that number.
 - 2026-10-12: `run-1` resumes with `--lean-workers 4` (it was 2). The Lean queue is often empty anyway, because the generator at depth 2 yields about one new sentence per batch. The four workers are for later model samples. The default function stays 2. Do not widen the generator during the first read.
 - 2026-10-12: the model starts writing when 10 losses in a row are < 0.45. One turn is 10 equations in the Lean queue, then 200 study steps. Migration 010.
 - 2026-10-12: the cursor stands on the first sentence without a verdict. 128 unfinished Lean checks are separate for the generator and for the model.
 - 2026-10-12: the "Model may write" card shows the stage: `n/10`, Yes, Studying, Waiting, or No.
 - 2026-10-12: a training step is four `proved` sentences. A shorter piece in front of an open check waits and is not its own step.
 - 2026-10-12: the README leads with the hypothesis of a model that reads only sentences Lean has accepted. The generator is the source of the first sentences. The repository text is in English.
+- 2026-10-12: When the forward read has nothing new, a replay walks proved rows already behind the cursor, generator and model together, by id. `lm_state.replay_id` (migration 011) is the last id included. A resume continues after it. The walk returns to 0 at the cursor. Replay does not enter the loss streak.
+- 2026-10-12: The headline on the page is own equations Lean accepted. Migration 012 stores `lm_step` and `loss` on `model_attempts` at the moment of writing. A repeat is not an acceptance. There is no difficulty grade, because a model sentence has no syntax tree.
 
 ## Progress
 
@@ -83,6 +85,14 @@ The loop must be stoppable and resumable: proposal → Lean 4 → status → SQL
 - [x] 2026-10-12: README leads with the model hypothesis. The generator is the source of the first sentences. Docs are in English.
 - [x] 2026-10-12: Adam moments are saved in `var/lm/<run>/adam.safetensors` next to the weights. A checkpoint without that file still starts Adam fresh.
 - [x] 2026-10-12: Adam is written every 500 training steps and on stop. Weights stay on the 20-step cadence.
+- [x] 2026-10-12: Replay walks already-read proved rows by id when the forward read is idle. `replay_id` resumes that walk.
+- [x] 2026-10-12: The finish-this-read clock is gone. "New material" counts proved sentences the first read has not reached. Replay is not in that number.
+- [x] 2026-10-12: The page leads with own equations Lean accepted. Each attempt stores the step and loss from the moment it was written.
+- [x] 2026-10-12: Accepted share is a line over the whole history, last 10 judged and from the start. A later fall stays visible.
+- [x] 2026-10-12: A block of 20 widens the next turn only when its Wilson interval sits wholly above the previous block. A wholly lower block narrows the turn by one step. Steps: 10/200/8, 20/100/12, 40/50/16.
+- [x] 2026-10-12: The same block also moves one step when the nesting depth of the accepted equations clears the margin and the accepted share does not move the other way. Depth 1, 2, and 3+ are the bands. A numeral's size and Lean's elapsed time are not inputs.
+- [x] 2026-10-12: Freedom is the latest block of 20, not a ratchet. Lower Wilson bound above 1/2 is the wider turn, above 3/4 the widest. At or below 1/2, including an average block, the turn returns to 10 equations and 200 study steps at once. Deep accepted equations add one step only while the share is already above 1/2.
+- [x] 2026-10-12: Migration 013 stores `expr_depth`, `expr_operators`, and `expr_size` on `model_attempts` at the moment of writing. NULL is unparsed text, not depth 0. The page charts mean depth and mean operator count of accepted equations, with a 95% interval on each block of 20.
 
 ## Next steps
 

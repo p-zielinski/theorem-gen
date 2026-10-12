@@ -491,3 +491,19 @@ CREATE INDEX IF NOT EXISTS idx_context_blocks_ready
 ALTER TABLE lm_state ADD COLUMN burst_left INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE lm_state ADD COLUMN study_left INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE lm_state ADD COLUMN recent_losses TEXT NOT NULL DEFAULT '[]';
+-- Where the repeat pass stopped. A resume continues after this candidate id.
+-- 0 means the next pass starts at the beginning.
+
+ALTER TABLE lm_state ADD COLUMN replay_id INTEGER NOT NULL DEFAULT 0;
+-- The training step and loss at the moment the model wrote the equation.
+-- Older rows stay empty. Disposition is updated later, these two are not.
+
+ALTER TABLE model_attempts ADD COLUMN lm_step INTEGER;
+ALTER TABLE model_attempts ADD COLUMN loss REAL;
+-- Shape of the equation text at the moment of writing.
+-- NULL means the text is not a statement of this fragment, not a depth of zero.
+-- Disposition may change later. These three do not.
+
+ALTER TABLE model_attempts ADD COLUMN expr_depth INTEGER;
+ALTER TABLE model_attempts ADD COLUMN expr_operators INTEGER;
+ALTER TABLE model_attempts ADD COLUMN expr_size INTEGER;

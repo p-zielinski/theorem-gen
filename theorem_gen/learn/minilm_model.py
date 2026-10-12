@@ -120,15 +120,24 @@ class Trainer:
         self.model.save_weights(str(path))
         if not moments:
             return
-        flat = dict(tree_flatten(self.optimizer.state))
+        flat = {
+            key: value
+            for key, value in tree_flatten(self.optimizer.state)
+            if isinstance(value, mx.array)
+        }
         if "step" in flat:
             flat["step"] = flat["step"].astype(mx.uint32)
         if "embed.weight.m" not in flat:
             return
         dest = path.with_name("adam.safetensors")
         tmp = path.with_name("adam.saving.safetensors")
-        mx.save_safetensors(str(tmp), flat)
-        os.replace(tmp, dest)
+        try:
+            mx.save_safetensors(str(tmp), flat)
+            os.replace(tmp, dest)
+        except Exception as exc:
+            if tmp.exists():
+                tmp.unlink()
+            print(f"lm adam save failed: {exc}", flush=True)
 
     def load(self, path) -> None:
         path = Path(path)

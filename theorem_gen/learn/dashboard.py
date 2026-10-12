@@ -3,33 +3,19 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
 
-from theorem_gen.learn.balance import LOSS_LIMIT, loss_is_ready, loss_streak, write_card
-from theorem_gen.learn.effort import effort_level, lean_time_band
-from theorem_gen.learn.minilm import BATCH_CANDIDATES
+from theorem_gen.learn.balance import LOSS_LIMIT, freedom_plan, loss_is_ready, loss_streak, write_card
+from theorem_gen.learn.effort import effort_level, lean_time_band, statement_depth, statement_measures
 from theorem_gen.learn.prefix import unread_in_prefix
 
 _WINDOW_S = 600
 _ATTEMPT_NAMES = ("duplicate", "queued", "proved", "unresolved", "ill_formed", "refuted")
 _FINISHED = ("duplicate", "proved", "unresolved", "ill_formed", "refuted")
-
-
-def reading_eta(unread: int, earlier_unread: int, elapsed_s: float):
-    """Seconds until the unread pile hits zero, from how fast it shrank.
-
-    None when no time has passed or the pile is not shrinking. A new proved
-    sentence raises `unread`, so that arrival is already inside the rate.
-    """
-    if elapsed_s <= 0:
-        return None
-    net = (earlier_unread - unread) / elapsed_s
-    if net <= 0:
-        return None
-    return unread / net
 
 
 def attempt_trend(attempts: dict) -> dict:
@@ -70,6 +56,137 @@ def attempt_trend(attempts: dict) -> dict:
         "all_proved": proved("all"),
         "all_done": done("all"),
     }
+
+
+def own_equation_summary(attempts: dict) -> dict:
+    """Accepted own equations, and how many Lean has already judged.
+
+    A repeat is judged and is not accepted. A row still waiting is neither.
+    """
+    accepted = int(attempts.get("proved", {}).get("all", 0))
+    waiting = int(attempts.get("queued", {}).get("all", 0))
+    finished = sum(int(attempts.get(name, {}).get("all", 0)) for name in _FINISHED)
+    return {"accepted": accepted, "finished": finished, "waiting": waiting}
+
+
+def acceptance_series(rows, window: int = 10) -> list:
+    """One point per judged equation, in time order.
+
+    `recent` is the accepted share of the last `window` judged equations.
+    `overall` is the accepted share from the first judged equation through this one.
+    A waiting row is left out. A later fall in `recent` is a stretch Lean did not accept.
+    """
+    if isinstance(window, bool) or not isinstance(window, int) or window < 1:
+        raise ValueError("window must be a positive int")
+    judged = []
+    accepted = 0
+    points = []
+    for created_at, disposition in rows:
+        if disposition == "queued":
+            continue
+        ok = disposition == "proved"
+        judged.append(ok)
+        if ok:
+            accepted += 1
+        start = max(0, len(judged) - window)
+        recent = judged[start:]
+        points.append(
+            {
+                "t": float(created_at),
+                "n": len(judged),
+                "recent": sum(recent) / len(recent),
+                "overall": accepted / len(judged),
+            }
+        )
+    return points
+
+
+# Two-sided 95% Student t critical value at 19 degrees of freedom.
+# Used only for a block of 20 accepted equations.
+_T_95_DF_19 = 2.093024054408263
+_SHAPE_BLOCK = 20
+
+
+def complexity_series(rows, window: int = 10) -> dict:
+    """Mean shape of equations Lean accepted, in the order they were written.
+
+    Each row is `(created_at, disposition, depth, operators, size)`. A waiting
+    row is left out. A proved row with a missing measure is counted in
+    `unmeasured` and is not entered as zero. `recent` is the mean depth of the
+    last `window` accepted equations. `overall` is the mean from the first.
+    Each finished block of 20 carries the 95% interval of its mean.
+    """
+    if isinstance(window, bool) or not isinstance(window, int) or window < 1:
+        raise ValueError("window must be a positive int")
+    accepted = []
+    unmeasured = 0
+    for created_at, disposition, depth, operators, size in rows:
+        if disposition != "proved":
+            continue
+        if depth is None or operators is None or size is None:
+            unmeasured += 1
+            continue
+        accepted.append((float(created_at), int(depth), int(operators), int(size)))
+    points = []
+    totals = [0, 0, 0]
+    for index, item in enumerate(accepted):
+        totals[0] += item[1]
+        totals[1] += item[2]
+        totals[2] += item[3]
+        window_rows = accepted[max(0, index + 1 - window) : index + 1]
+        count = index + 1
+        points.append(
+            {
+                "t": item[0],
+                "n": count,
+                "depth": item[1],
+                "operators": item[2],
+                "size": item[3],
+                "recent": _mean(row[1] for row in window_rows),
+                "overall": totals[0] / count,
+                "recent_operators": _mean(row[2] for row in window_rows),
+                "overall_operators": totals[1] / count,
+                "recent_size": _mean(row[3] for row in window_rows),
+                "overall_size": totals[2] / count,
+            }
+        )
+    return {
+        "accepted": len(accepted),
+        "unmeasured": unmeasured,
+        "points": points,
+        "depth_blocks": _mean_blocks(accepted, 1),
+        "operator_blocks": _mean_blocks(accepted, 2),
+        "size_blocks": _mean_blocks(accepted, 3),
+    }
+
+
+def _mean(values) -> float:
+    found = list(values)
+    return sum(found) / len(found)
+
+
+def _mean_blocks(accepted, column: int) -> list:
+    blocks = []
+    complete = len(accepted) // _SHAPE_BLOCK
+    for index in range(complete):
+        values = [
+            item[column]
+            for item in accepted[index * _SHAPE_BLOCK : (index + 1) * _SHAPE_BLOCK]
+        ]
+        mean = sum(values) / _SHAPE_BLOCK
+        variance = sum((item - mean) ** 2 for item in values) / (_SHAPE_BLOCK - 1)
+        spread = math.sqrt(variance)
+        half = _T_95_DF_19 * spread / math.sqrt(_SHAPE_BLOCK)
+        blocks.append(
+            {
+                "n": (index + 1) * _SHAPE_BLOCK,
+                "mean": mean,
+                "sd": spread,
+                "low": mean - half,
+                "high": mean + half,
+            }
+        )
+    return blocks
 
 
 def snapshot(db_path: Path, run_id: str, *, now: Optional[float] = None) -> dict:
@@ -172,6 +289,7 @@ def snapshot(db_path: Path, run_id: str, *, now: Optional[float] = None) -> dict
                     "step": row["step"],
                     "epoch": row["epoch"],
                     "cursor_id": cursor_id,
+                    "replay_id": int(row["replay_id"]) if "replay_id" in names else 0,
                     "last_loss": row["last_loss"],
                     "hold": bool(row["hold"]),
                     "weak_streak": row["weak_streak"],
@@ -181,16 +299,8 @@ def snapshot(db_path: Path, run_id: str, *, now: Optional[float] = None) -> dict
                     "loss_limit": LOSS_LIMIT,
                     "loss_streak": loss_streak(losses),
                 }
-        study = conn.execute(
-            """
-            SELECT SUM(CASE WHEN held_out=0 THEN 1 ELSE 0 END) AS study_total
-            FROM candidates
-            WHERE run_id=? AND current_status='proved'
-            """,
-            (run_id,),
-        ).fetchone()
         unread = unread_in_prefix(conn, run_id, cursor_id)
-        study_total = int(study["study_total"] or 0)
+        plan = freedom_plan(_judged_dispositions(conn, run_id))
         lean_lanes = _lean_lanes(conn, run_id)
         if lm is not None:
             model_lane = lean_lanes["model"]
@@ -201,12 +311,16 @@ def snapshot(db_path: Path, run_id: str, *, now: Optional[float] = None) -> dict
                 streak=int(lm["loss_streak"]),
                 model_backlog=int(model_lane["queued"]) + int(model_lane["leased"]),
                 last_loss=lm["last_loss"],
+                burst=plan["burst"],
+                study=plan["study"],
+                weak=plan["weak"],
             )
             lm["write_label"] = label
             lm["write_hint"] = hint
         attempts = {
             name: {"all": 0, "recent": 0, "previous": 0} for name in _ATTEMPT_NAMES
         }
+        recent_attempts = []
         if _table(conn, "model_attempts"):
             recent_after = now - _WINDOW_S
             previous_after = now - (2 * _WINDOW_S)
@@ -229,6 +343,8 @@ def snapshot(db_path: Path, run_id: str, *, now: Optional[float] = None) -> dict
                     "recent": int(row["recent_n"]),
                     "previous": int(row["previous_n"]),
                 }
+            recent_attempts = _recent_attempts(conn, run_id)
+        series = _acceptance_series(conn, run_id)
         return {
             "run_id": run_id,
             "status": None if run is None else run["status"],
@@ -244,10 +360,13 @@ def snapshot(db_path: Path, run_id: str, *, now: Optional[float] = None) -> dict
             "lean_bands": lean_bands,
             "lm": lm,
             "unread": unread,
-            "study_total": study_total,
-            "updates_left": (unread + BATCH_CANDIDATES - 1) // BATCH_CANDIDATES,
             "attempts": attempts,
             "attempt_trend": attempt_trend(attempts),
+            "own": own_equation_summary(attempts),
+            "own_series": series,
+            "freedom": _freedom_with_times(plan, series),
+            "complexity": _complexity(conn, run_id),
+            "recent_attempts": recent_attempts,
             "context_blocked": _context_blocked(conn, run_id),
             "lean_lanes": lean_lanes,
         }
@@ -281,6 +400,130 @@ def _lean_lanes(conn, run_id: str) -> dict:
         if lane in lanes and row["state"] in lanes[lane]:
             lanes[lane][row["state"]] = int(row["n"])
     return lanes
+
+
+def _recent_attempts(conn, run_id: str) -> list:
+    """Newest own equations, with the step and loss stored at the time of writing."""
+    names = {row[1] for row in conn.execute("PRAGMA table_info(model_attempts)")}
+    step = "lm_step" if "lm_step" in names else "NULL AS lm_step"
+    loss = "loss" if "loss" in names else "NULL AS loss"
+    depth = "expr_depth" if "expr_depth" in names else "NULL AS expr_depth"
+    operators = "expr_operators" if "expr_operators" in names else "NULL AS expr_operators"
+    size = "expr_size" if "expr_size" in names else "NULL AS expr_size"
+    rows = conn.execute(
+        f"""
+        SELECT equation, disposition, {step}, {loss}, {depth}, {operators}, {size}
+        FROM model_attempts
+        WHERE run_id=?
+        ORDER BY id DESC
+        LIMIT 8
+        """,
+        (run_id,),
+    ).fetchall()
+    found = []
+    for row in rows:
+        shape = _shape_of(row)
+        found.append(
+            {
+                "equation": row["equation"],
+                "disposition": row["disposition"],
+                "lm_step": None if row["lm_step"] is None else int(row["lm_step"]),
+                "loss": None if row["loss"] is None else float(row["loss"]),
+                "expr_depth": None if shape is None else shape["depth"],
+                "expr_operators": None if shape is None else shape["operators"],
+                "expr_size": None if shape is None else shape["size"],
+            }
+        )
+    return found
+
+
+def _judged_dispositions(conn, run_id: str) -> list:
+    if not _table(conn, "model_attempts"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT disposition, equation FROM model_attempts
+        WHERE run_id=? AND disposition != 'queued'
+        ORDER BY CAST(created_at AS REAL), id
+        """,
+        (run_id,),
+    ).fetchall()
+    return [
+        (row["disposition"], statement_depth(row["equation"] or ""))
+        for row in rows
+    ]
+
+
+def _freedom_with_times(plan: dict, series: list) -> dict:
+    times = {point["n"]: point["t"] for point in series}
+    blocks = []
+    for block in plan["blocks"]:
+        marked = dict(block)
+        if block["n"] in times:
+            marked["t"] = times[block["n"]]
+        blocks.append(marked)
+    marked_plan = dict(plan)
+    marked_plan["blocks"] = blocks
+    return marked_plan
+
+
+def _complexity(conn, run_id: str) -> dict:
+    if not _table(conn, "model_attempts"):
+        return complexity_series(())
+    names = {row[1] for row in conn.execute("PRAGMA table_info(model_attempts)")}
+    depth = "expr_depth" if "expr_depth" in names else "NULL AS expr_depth"
+    operators = "expr_operators" if "expr_operators" in names else "NULL AS expr_operators"
+    size = "expr_size" if "expr_size" in names else "NULL AS expr_size"
+    rows = conn.execute(
+        f"""
+        SELECT created_at, disposition, equation, {depth}, {operators}, {size}
+        FROM model_attempts
+        WHERE run_id=?
+        ORDER BY CAST(created_at AS REAL), id
+        """,
+        (run_id,),
+    ).fetchall()
+    shaped = []
+    for row in rows:
+        measures = _shape_of(row)
+        shaped.append(
+            (
+                row["created_at"],
+                row["disposition"],
+                None if measures is None else measures["depth"],
+                None if measures is None else measures["operators"],
+                None if measures is None else measures["size"],
+            )
+        )
+    return complexity_series(shaped)
+
+
+def _shape_of(row) -> Optional[dict]:
+    """Stored shape, or the shape of the equation text when the columns are empty."""
+    keys = row.keys()
+    if "expr_depth" in keys and row["expr_depth"] is not None:
+        return {
+            "depth": int(row["expr_depth"]),
+            "operators": int(row["expr_operators"]),
+            "size": int(row["expr_size"]),
+        }
+    if "equation" not in keys:
+        return None
+    return statement_measures(row["equation"] or "")
+
+
+def _acceptance_series(conn, run_id: str) -> list:
+    if not _table(conn, "model_attempts"):
+        return []
+    rows = conn.execute(
+        """
+        SELECT created_at, disposition FROM model_attempts
+        WHERE run_id=? AND disposition != 'queued'
+        ORDER BY CAST(created_at AS REAL), id
+        """,
+        (run_id,),
+    ).fetchall()
+    return acceptance_series((row["created_at"], row["disposition"]) for row in rows)
 
 
 def _context_blocked(conn, run_id: str) -> int:
@@ -343,6 +586,11 @@ _PAGE = """<!DOCTYPE html>
   h1 { font-size: 28px; margin: 0; }
   h2 { font-size: 18px; margin: 28px 0 6px; }
   p { margin: 6px 0 0; color: #44403c; }
+  ul { margin: 8px 0 0; padding-left: 18px; }
+  #own-chart { background: white; border: 1px solid #e7e5e4; border-radius: 8px; margin-top: 10px; }
+  #own-chart svg { display: block; width: 100%; height: auto; }
+  .legend { font: 13px/1.4 sans-serif; color: #57534e; margin-top: 6px; }
+  .swatch { display: inline-block; width: 18px; height: 3px; margin: 0 6px 2px 0; vertical-align: middle; }
   table { width: 100%; border-collapse: collapse; background: white; margin-top: 8px; }
   th, td { border-bottom: 1px solid #e7e5e4; padding: 8px 10px; text-align: left; font-variant-numeric: tabular-nums; }
   th { color: #57534e; font-weight: 600; font-family: sans-serif; font-size: 13px; }
@@ -351,26 +599,44 @@ _PAGE = """<!DOCTYPE html>
   .card span { display: block; color: #57534e; font: 13px/1.3 sans-serif; }
   .card b { display: block; font-size: 28px; margin: 4px 0; font-variant-numeric: tabular-nums; }
   .card em { display: block; font-style: normal; color: #78716c; font: 13px/1.35 sans-serif; min-height: 34px; }
-  #eta { font-size: 22px; }
 </style>
 </head>
 <body>
 <h1>Run __RUN__</h1>
 <p id="meta">Loading…</p>
 <div class="grid">
+  <div class="card"><span>Own equations accepted</span><b id="own-accepted">—</b><em id="own-accepted-hint">New equations the model wrote that Lean accepted. A repeat of a known sentence is not counted.</em></div>
+  <div class="card"><span>Accepted share</span><b id="own-share">—</b><em>Of the own equations Lean has already judged. Ones still waiting are left out. This is not a grade of difficulty.</em></div>
+  <div class="card"><span>Freedom</span><b id="freedom">—</b><em id="freedom-hint">Baseline is 10 equations in a turn, then 200 study steps. The latest block of 20 sets it. An average block comes back here.</em></div>
   <div class="card"><span>Proved by Lean</span><b id="proved">—</b><em>Lean accepted the proof. This is the pile the model studies.</em></div>
   <div class="card"><span>Still open</span><b id="open">—</b><em>Checked, but not proved and not rejected as nonsense.</em></div>
   <div class="card"><span>New sentences, last 10 min</span><b id="recent">—</b><em id="recent-hint">How fast the generator is adding work.</em></div>
   <div class="card"><span>Training step</span><b id="step">—</b><em>One small update of the model weights. Each update reads 4 proved sentences.</em></div>
-  <div class="card"><span>Still to read</span><b id="unread">—</b><em id="unread-hint">Proved sentences past the read position.</em></div>
-  <div class="card"><span>Time to finish this read</span><b id="eta">—</b><em>A rough clock for the first read, from how fast the unread pile shrank over the last minute. The model may write earlier, once loss stays low.</em></div>
+  <div class="card"><span>New material</span><b id="unread">—</b><em id="unread-hint">Proved sentences the first read has not reached. Replay of sentences already behind the cursor is not included.</em></div>
   <div class="card"><span>Epoch</span><b id="epoch">—</b><em>How many times the model has read every proved sentence. 0 means the first read is not finished.</em></div>
   <div class="card"><span>Loss</span><b id="loss">—</b><em>How surprised the model is by the next word. Lower is better. It began near 8.</em></div>
   <div class="card"><span>Read position</span><b id="cursor">—</b><em>How far the first read has walked. New proved sentences sit past this number.</em></div>
+  <div class="card"><span>Replay position</span><b id="replay">—</b><em>Last id of the repeat pass over sentences already read, from the generator and the model. A resume continues after this number. 0 means the next pass starts at the beginning.</em></div>
   <div class="card"><span>Model may write</span><b id="hold">—</b><em id="hold-hint">Low losses in a row, out of 10. At 10 it adds 10 equations, then studies for 200 steps.</em></div>
   <div class="card"><span>Weak tries in a row</span><b id="weak">—</b><em>Repeats and failed equations. At 8 the model stops writing and studies again.</em></div>
   <div class="card"><span>Waiting on the window</span><b id="context-blocked">—</b><em>Blocked by context limit. The start and end marks count. These proved sentences stay here until the window can hold the whole sentence.</em></div>
 </div>
+<h2>Accepted share over time</h2>
+<p>Each point is one equation Lean has already judged, in the order it was written. The dark line is the share of the last 10. The pale line is the share from the first judged equation up to that moment. A rust bar is one block of 20 and its margin. Freedom looks only at the latest of those bars. Above one half, with the margin, the turn widens. An average bar returns it to the baseline. Waiting equations are not on the chart.</p>
+<div id="own-chart"></div>
+<p class="legend"><span class="swatch" style="background:#1c1917"></span>Last 10 judged <span class="swatch" style="background:#a8a29e;margin-left:16px"></span>From the start <span class="swatch" style="background:#9a3412;margin-left:16px"></span>Block of 20, with margin</p>
+<h2>Depth of accepted equations</h2>
+<p>These are new equations the model wrote that Lean accepted. Depth, the number of operators, and the number of nodes are the same three counts as the generator's syntax tree. A numeral of any size is one leaf. A comparison such as 0 = 0 has depth 1 and no operator. Each + or * counts as one operator. Text that is not a statement of this fragment is left out, not entered as zero. The dark line is the mean depth of the last 10 accepted equations. The pale line is the mean from the first. A bar on every 20 is the 95% interval of that block's mean. The freedom rule above uses a coarser version of this depth. This chart is the measurement.</p>
+<div id="depth-chart"></div>
+<p class="legend"><span class="swatch" style="background:#1c1917"></span>Mean of the last 10 <span class="swatch" style="background:#a8a29e;margin-left:16px"></span>Mean from the start <span class="swatch" style="background:#1e3a8a;margin-left:16px"></span>95% interval of 20</p>
+<p id="shape-summary">No accepted equation with a measured shape yet.</p>
+<h2>Operators in accepted equations</h2>
+<p>The same accepted equations. A comparison by itself stays at zero. A chain of additions raises the count by one per +.</p>
+<div id="operator-chart"></div>
+<p id="operator-summary"></p>
+<h2>Latest own equations</h2>
+<p>Newest first. Accepted means Lean took a sentence that was not already in the run. The step and loss are the ones at the moment of writing. Depth is the nesting of that sentence. It is not a grade against the generator, and a longer number is not a deeper sentence.</p>
+<ul id="own-list"><li>None yet.</li></ul>
 <h2>Queues</h2>
 <p>Waiting is work not started. Checking is work happening now. Finished is done. Failed is given up. Lean checks for the generator and the model each have room for 128 unfinished items. One full lane does not close the other. The training cursor still waits at the first sentence that has no verdict yet, so a faster machine does not skip ahead.</p>
 <table>
@@ -426,6 +692,16 @@ async function refresh() {
   const statuses = data.statuses || {};
   const lesson = data.curriculum_level == null ? "—" : data.curriculum_level;
   text("meta", "State: " + data.status + ". Curriculum lesson " + lesson + " of 7. Champion: " + data.model_version + ".");
+  const own = data.own || {};
+  text("own-accepted", own.accepted ?? 0);
+  text("own-accepted-hint", ownHint(own));
+  text("own-share", own.finished ? (own.accepted + " / " + own.finished) : "—");
+  const plan = data.freedom || {};
+  text("freedom", (plan.level || 0) === 0 ? "Baseline" : ((plan.burst || 10) + " / " + (plan.study || 200)));
+  text("freedom-hint", freedomHint(plan));
+  ownList(data.recent_attempts || []);
+  drawShare(data.own_series || [], plan.blocks || []);
+  drawShape(data.complexity || {});
   text("proved", statuses.proved || 0);
   text("open", statuses.unresolved || 0);
   text("recent", data.recent_candidates);
@@ -434,11 +710,11 @@ async function refresh() {
   text("step", lm.step ?? "—");
   const unread = data.unread ?? 0;
   text("unread", unread);
-  text("unread-hint", unreadHint(lm, unread, data.study_total || 0, data.updates_left || 0));
-  text("eta", readingClock(unread));
+  text("unread-hint", unreadHint(unread));
   text("epoch", lm.epoch ?? "—");
   text("loss", lm.last_loss == null ? "—" : Number(lm.last_loss).toFixed(3));
   text("cursor", lm.cursor_id ?? "—");
+  text("replay", lm.replay_id ?? "—");
   text("hold", lm.write_label || "—");
   text("hold-hint", lm.write_hint || "");
   text("weak", lm.weak_streak ?? 0);
@@ -475,34 +751,197 @@ async function refresh() {
   }
   text("attempt-trend", trendText(data.attempt_trend || {}));
 }
-const paceSamples = [];
-function readingClock(unread) {
-  if (unread === 0) return "Now";
-  const now = Date.now();
-  paceSamples.push({t: now, unread: unread});
-  const horizon = now - 90000;
-  while (paceSamples.length > 1 && paceSamples[0].t < horizon) paceSamples.shift();
-  const span = (now - paceSamples[0].t) / 1000;
-  if (span < 20) return "Measuring…";
-  const net = (paceSamples[0].unread - unread) / span;
-  if (net <= 0) return "Not shrinking";
-  return formatDuration(unread / net);
+function freedomHint(plan) {
+  const burst = plan.burst || 10;
+  const study = plan.study || 200;
+  const weak = plan.weak || 8;
+  const name = (plan.level || 0) === 0 ? "Baseline" : ((plan.level || 0) === 1 ? "Wider" : "Widest");
+  return name + ". " + burst + " equations, then " + study + " study steps. Stop after " + weak + " weak tries in a row. An average block of 20 returns to the baseline. " + (plan.next_in || 20) + " judged equations until the next block.";
 }
-function formatDuration(seconds) {
-  const minutes = Math.round(seconds / 60);
-  if (minutes < 2) return "about " + Math.max(1, Math.round(seconds)) + " seconds";
-  if (minutes < 90) return "about " + minutes + " minutes";
-  const hours = Math.floor(minutes / 60);
-  const rest = minutes % 60;
-  if (rest < 5) return "about " + hours + (hours === 1 ? " hour" : " hours");
-  return "about " + hours + (hours === 1 ? " hour " : " hours ") + rest + " minutes";
-}
-function unreadHint(lm, unread, studyTotal, updatesLeft) {
-  if (unread === 0) {
-    return "Nothing unread in this pass. A newly proved sentence raises this again.";
+function drawShare(points, blocks) {
+  const host = document.getElementById("own-chart");
+  host.replaceChildren();
+  const w = 920, h = 220, left = 40, right = 16, top = 16, bottom = 32;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 " + w + " " + h);
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", "Accepted share of the model's own equations over time");
+  function add(name, attrs) {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+    for (const key of Object.keys(attrs)) node.setAttribute(key, attrs[key]);
+    svg.appendChild(node);
+    return node;
   }
-  return studyTotal + " proved sentences are in this pass. About " + updatesLeft
-    + " weight updates left if no new sentence arrives. New proved sentences raise it again.";
+  if (!points.length) {
+    add("text", {x: left, y: h / 2, fill: "#78716c", "font-size": "14", "font-family": "sans-serif"}).textContent = "No judged equations yet.";
+    host.appendChild(svg);
+    return;
+  }
+  const t0 = points[0].t;
+  const t1 = points[points.length - 1].t;
+  const span = t1 - t0;
+  function xAt(point, index) {
+    const along = span === 0
+      ? (points.length === 1 ? 0.5 : index / (points.length - 1))
+      : (point.t - t0) / span;
+    return left + along * (w - left - right);
+  }
+  function yAt(share) {
+    return top + (1 - share) * (h - top - bottom);
+  }
+  for (const share of [0, 0.5, 1]) {
+    const y = yAt(share);
+    add("line", {x1: left, y1: y, x2: w - right, y2: y, stroke: "#e7e5e4"});
+    add("text", {x: 4, y: y + 4, fill: "#78716c", "font-size": "11", "font-family": "sans-serif"}).textContent = Math.round(share * 100) + "%";
+  }
+  function line(key, color) {
+    const d = points.map((point, index) => (index ? "L" : "M") + xAt(point, index).toFixed(1) + " " + yAt(point[key]).toFixed(1)).join(" ");
+    add("path", {d: d, fill: "none", stroke: color, "stroke-width": "2"});
+  }
+  line("overall", "#a8a29e");
+  line("recent", "#1c1917");
+  for (const block of blocks || []) {
+    const index = points.findIndex((point) => point.n === block.n);
+    if (index < 0) continue;
+    const x = xAt(points[index], index);
+    add("line", {x1: x, y1: yAt(block.low), x2: x, y2: yAt(block.high), stroke: "#9a3412", "stroke-width": "3"});
+    add("circle", {cx: x, cy: yAt(block.p), r: "2.5", fill: "#9a3412"});
+  }
+  if (points.length === 1) {
+    add("circle", {cx: xAt(points[0], 0), cy: yAt(points[0].recent), r: "3", fill: "#1c1917"});
+  }
+  add("text", {x: left, y: h - 8, fill: "#78716c", "font-size": "11", "font-family": "sans-serif"}).textContent = clockLabel(t0);
+  const end = add("text", {x: w - right, y: h - 8, fill: "#78716c", "font-size": "11", "font-family": "sans-serif", "text-anchor": "end"});
+  end.textContent = span === 0 ? "same moment" : clockLabel(t1);
+  host.appendChild(svg);
+}
+function drawShape(complexity) {
+  const points = complexity.points || [];
+  drawMeasure("depth-chart", points, complexity.depth_blocks || [], "depth", "recent", "overall", "Mean depth of accepted equations");
+  drawMeasure("operator-chart", points, complexity.operator_blocks || [], "operators", "recent_operators", "overall_operators", "Mean operator count of accepted equations");
+  const summary = document.getElementById("shape-summary");
+  const operators = document.getElementById("operator-summary");
+  if (!points.length) {
+    const skipped = complexity.unmeasured ? " " + complexity.unmeasured + " accepted equations had no measurable shape." : "";
+    summary.textContent = "No accepted equation with a measured shape yet." + skipped;
+    operators.textContent = "";
+    return;
+  }
+  const last = points[points.length - 1];
+  const skipped = complexity.unmeasured ? " Left out: " + complexity.unmeasured + "." : "";
+  summary.textContent = "Last 10: depth " + last.recent.toFixed(2) + ". From the start: depth " + last.overall.toFixed(2) + ". Nodes, from the start: " + last.overall_size.toFixed(2) + "." + skipped;
+  operators.textContent = "Last 10: " + last.recent_operators.toFixed(2) + " operators. From the start: " + last.overall_operators.toFixed(2) + ".";
+}
+function drawMeasure(hostId, points, blocks, key, recentKey, overallKey, label) {
+  const host = document.getElementById(hostId);
+  host.replaceChildren();
+  const w = 920, h = 220, left = 40, right = 16, top = 16, bottom = 32;
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 " + w + " " + h);
+  svg.setAttribute("role", "img");
+  svg.setAttribute("aria-label", label);
+  function add(name, attrs) {
+    const node = document.createElementNS("http://www.w3.org/2000/svg", name);
+    for (const keyName of Object.keys(attrs)) node.setAttribute(keyName, attrs[keyName]);
+    svg.appendChild(node);
+    return node;
+  }
+  if (!points.length) {
+    add("text", {x: left, y: h / 2, fill: "#78716c", "font-size": "14", "font-family": "sans-serif"}).textContent = "No accepted equation with a measured shape yet.";
+    host.appendChild(svg);
+    return;
+  }
+  const ys = [];
+  for (const point of points) ys.push(point[key], point[recentKey], point[overallKey]);
+  for (const block of blocks) ys.push(block.low, block.high, block.mean);
+  const yMax = Math.max(1, ...ys.map((value) => Math.max(0, value)));
+  const t0 = points[0].t;
+  const t1 = points[points.length - 1].t;
+  const span = t1 - t0;
+  function xAt(point, index) {
+    const along = span === 0
+      ? (points.length === 1 ? 0.5 : index / (points.length - 1))
+      : (point.t - t0) / span;
+    return left + along * (w - left - right);
+  }
+  function yAt(value) {
+    return top + (1 - Math.max(0, value) / yMax) * (h - top - bottom);
+  }
+  for (const mark of [0, yMax / 2, yMax]) {
+    const y = yAt(mark);
+    add("line", {x1: left, y1: y, x2: w - right, y2: y, stroke: "#e7e5e4"});
+    add("text", {x: 4, y: y + 4, fill: "#78716c", "font-size": "11", "font-family": "sans-serif"}).textContent = mark.toFixed(mark >= 10 ? 0 : 1);
+  }
+  function line(field, color) {
+    const d = points.map((point, index) => (index ? "L" : "M") + xAt(point, index).toFixed(1) + " " + yAt(point[field]).toFixed(1)).join(" ");
+    add("path", {d: d, fill: "none", stroke: color, "stroke-width": "2"});
+  }
+  for (const point of points) {
+    const index = points.indexOf(point);
+    add("circle", {cx: xAt(point, index), cy: yAt(point[key]), r: "2", fill: "#78716c"});
+  }
+  line(overallKey, "#a8a29e");
+  line(recentKey, "#1c1917");
+  for (const block of blocks) {
+    const index = points.findIndex((point) => point.n === block.n);
+    if (index < 0) continue;
+    const x = xAt(points[index], index);
+    add("line", {x1: x, y1: yAt(block.low), x2: x, y2: yAt(block.high), stroke: "#1e3a8a", "stroke-width": "3"});
+    add("circle", {cx: x, cy: yAt(block.mean), r: "2.5", fill: "#1e3a8a"});
+  }
+  add("text", {x: left, y: h - 8, fill: "#78716c", "font-size": "11", "font-family": "sans-serif"}).textContent = clockLabel(t0);
+  const end = add("text", {x: w - right, y: h - 8, fill: "#78716c", "font-size": "11", "font-family": "sans-serif", "text-anchor": "end"});
+  end.textContent = span === 0 ? "same moment" : clockLabel(t1);
+  host.appendChild(svg);
+}
+function clockLabel(seconds) {
+  const when = new Date(seconds * 1000);
+  return when.toLocaleString(undefined, {month: "short", day: "numeric", hour: "2-digit", minute: "2-digit"});
+}
+function ownHint(own) {
+  if (!own.finished && !own.waiting) {
+    return "None yet. Writing starts after 10 losses in a row under 0.45. A repeat of a known sentence is not counted.";
+  }
+  if (!own.accepted) {
+    return "Lean has judged " + own.finished + ". None were a new accepted equation. Still waiting: " + (own.waiting || 0) + ".";
+  }
+  return "New equations the model wrote that Lean accepted. Repeats are not counted. Still waiting: " + (own.waiting || 0) + ".";
+}
+function verdictLabel(name) {
+  return {
+    duplicate: "Repeat",
+    queued: "Waiting for Lean",
+    proved: "Accepted",
+    unresolved: "Not proved",
+    ill_formed: "Not a formula",
+    refuted: "Refuted"
+  }[name] || name;
+}
+function ownList(rows) {
+  const list = document.getElementById("own-list");
+  list.replaceChildren();
+  if (!rows.length) {
+    const item = document.createElement("li");
+    item.textContent = "None yet. Writing starts after 10 losses in a row under 0.45.";
+    list.appendChild(item);
+    return;
+  }
+  for (const row of rows) {
+    const item = document.createElement("li");
+    const where = [];
+    if (row.lm_step != null) where.push("step " + row.lm_step);
+    if (row.loss != null) where.push("loss " + Number(row.loss).toFixed(3));
+    if (row.expr_depth != null) where.push("depth " + row.expr_depth + ", " + row.expr_operators + " operators, " + row.expr_size + " nodes");
+    const tail = where.length ? " (" + where.join(", ") + ")" : "";
+    item.textContent = verdictLabel(row.disposition) + ". " + row.equation + tail;
+    list.appendChild(item);
+  }
+}
+function unreadHint(unread) {
+  if (unread === 0) {
+    return "The first read has caught up. Replay continues over sentences already read. A newly proved sentence raises this again.";
+  }
+  return "Proved sentences the first read has not reached. The replay walks sentences already behind the cursor and is not in this number.";
 }
 function trendText(trend) {
   const recentProved = trend.recent_proved || 0;

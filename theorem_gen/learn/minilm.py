@@ -18,15 +18,18 @@ from pathlib import Path
 
 from theorem_gen.learn.errors import Backpressure
 from theorem_gen.learn.prefix import is_in_flight, unread_in_prefix
+from theorem_gen.learn.replay import next_replay
 from theorem_gen.learn.balance import (
     after_sample,
     after_train,
     choose_action,
+    freedom_plan,
     loss_is_ready,
     observe,
     open_burst,
     remember_loss,
 )
+from theorem_gen.learn.effort import remember_shapes, statement_depth, statement_measures
 from theorem_gen.learn.heldout import HELD_OUT_HASHES
 
 ADAM_EVERY = 500
@@ -232,14 +235,20 @@ class MiniLMService:
         self.burst_left = 0
         self.study_left = 0
         self.recent_losses = []
+        self.replay_id = 0
         self._aligned = False
+        self._shapes_ready = False
 
     def tick(self, engine) -> None:
         self._load_state(engine.store, engine.run_id)
+        if not self._shapes_ready:
+            remember_shapes(engine.store.conn)
+            self._shapes_ready = True
         self._rewind_to_weights()
         ready = loss_is_ready(self.recent_losses)
+        plan = freedom_plan(self._judged_dispositions(engine.store, engine.run_id))
         self.burst_left, self.study_left = open_burst(
-            self.burst_left, self.study_left, ready and not self.hold
+            self.burst_left, self.study_left, ready and not self.hold, plan["burst"]
         )
         action = choose_action(
             untrained=self._untrained(engine.store, engine.run_id),
@@ -262,6 +271,8 @@ class MiniLMService:
             if updated != self.study_left:
                 self.study_left = updated
                 self._save_state(engine.store, engine.run_id)
+            if outcome == "idle":
+                self._replay(engine)
         elif action == "rehearse":
             self._rehearse(engine)
         elif action == "sample":
@@ -270,7 +281,7 @@ class MiniLMService:
             except Backpressure:
                 return
             self.burst_left, self.study_left = after_sample(
-                self.burst_left, self.study_left, disposition
+                self.burst_left, self.study_left, disposition, plan["study"]
             )
             self._save_state(engine.store, engine.run_id)
 
@@ -363,6 +374,36 @@ class MiniLMService:
         self.epoch += 1
         self._save_state(engine.store, engine.run_id)
 
+    def _replay(self, engine) -> None:
+        """One page of sentences already read. New work stays in front of this."""
+        rows, nxt = next_replay(
+            engine.store.conn,
+            engine.run_id,
+            self.replay_id,
+            self.cursor_id,
+            BATCH_CANDIDATES,
+        )
+        docs = []
+        for candidate in rows:
+            role_docs = role_documents(_source_for(engine.store, engine.run_id, candidate))
+            if not role_docs or overflowing_length(role_docs, self.config.context):
+                continue
+            docs.extend(role_docs)
+        if docs:
+            self._fit(docs)
+            self.step += 1
+            self.sequences += len(docs)
+        if nxt == self.replay_id and not docs:
+            return
+        self.replay_id = nxt
+        self._save_state(engine.store, engine.run_id)
+        if docs and self.step % 20 == 0:
+            self._write_weights(moments=self.step % ADAM_EVERY == 0)
+            print(
+                f"lm replay step={self.step} replay_id={self.replay_id} cursor={self.cursor_id}",
+                flush=True,
+            )
+
     def _sample(self, engine) -> str:
         self._ensure_seen(engine.store, engine.run_id)
         self._ensure_trainer()
@@ -424,19 +465,34 @@ class MiniLMService:
 
     def _record(self, engine, body: str, digest: str, disposition: str, candidate_id) -> None:
         now = engine.store.now()
+        shape = statement_measures(body)
         engine.store.conn.execute(
             """
             INSERT INTO model_attempts (
-              run_id, equation, equation_hash, origin, disposition, candidate_id, created_at
-            ) VALUES (?, ?, ?, 'model', ?, ?, ?)
+              run_id, equation, equation_hash, origin, disposition, candidate_id, created_at,
+              lm_step, loss, expr_depth, expr_operators, expr_size
+            ) VALUES (?, ?, ?, 'model', ?, ?, ?, ?, ?, ?, ?, ?)
             """,
-            (engine.run_id, body, digest, disposition, candidate_id, now),
+            (
+                engine.run_id,
+                body,
+                digest,
+                disposition,
+                candidate_id,
+                now,
+                self.step,
+                self.last_loss,
+                None if shape is None else shape["depth"],
+                None if shape is None else shape["operators"],
+                None if shape is None else shape["size"],
+            ),
         )
         if disposition != "queued":
             self._apply_observation(engine.store, engine.run_id, disposition)
 
     def _apply_observation(self, store, run_id: str, disposition: str) -> None:
-        streak, should_hold = observe(disposition, self.weak_streak)
+        plan = freedom_plan(self._judged_dispositions(store, run_id))
+        streak, should_hold = observe(disposition, self.weak_streak, plan["weak"])
         self.weak_streak = streak
         if disposition == "proved":
             self.hold = False
@@ -483,6 +539,7 @@ class MiniLMService:
                     "burst_left": self.burst_left,
                     "study_left": self.study_left,
                     "recent_losses": self.recent_losses,
+                    "replay_id": self.replay_id,
                 }
             ),
             encoding="utf-8",
@@ -508,6 +565,9 @@ class MiniLMService:
                 self.burst_left = int(meta["burst_left"])
                 self.study_left = int(meta["study_left"])
                 self.recent_losses = [float(item) for item in meta.get("recent_losses") or []]
+            if "replay_id" in meta:
+                self.replay_id = int(meta["replay_id"])
+        self._keep_replay_behind_the_cursor()
 
     def _ready_blocked(self, engine) -> tuple:
         rows = engine.store._all(
@@ -611,6 +671,24 @@ class MiniLMService:
     def _untrained(self, store, run_id: str) -> int:
         return unread_in_prefix(store.conn, run_id, self.cursor_id)
 
+    def _judged_dispositions(self, store, run_id: str) -> list:
+        if store._one(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='model_attempts'"
+        ) is None:
+            return []
+        rows = store._all(
+            """
+            SELECT disposition, equation FROM model_attempts
+            WHERE run_id=? AND disposition != 'queued'
+            ORDER BY CAST(created_at AS REAL), id
+            """,
+            (run_id,),
+        )
+        return [
+            (row["disposition"], statement_depth(row["equation"] or ""))
+            for row in rows
+        ]
+
     def _hash_known(self, store, run_id: str, digest: str) -> bool:
         row = store._one(
             """
@@ -665,6 +743,13 @@ class MiniLMService:
         self.burst_left = int(row["burst_left"])
         self.study_left = int(row["study_left"])
         self.recent_losses = [float(item) for item in json.loads(row["recent_losses"] or "[]")]
+        names = set(row.keys())
+        self.replay_id = int(row["replay_id"]) if "replay_id" in names else 0
+        self._keep_replay_behind_the_cursor()
+
+    def _keep_replay_behind_the_cursor(self) -> None:
+        if self.replay_id > self.cursor_id:
+            self.replay_id = self.cursor_id
 
     def _save_state(self, store, run_id: str) -> None:
         now = store.now()
@@ -676,8 +761,8 @@ class MiniLMService:
                 INSERT INTO lm_state (
                   run_id, step, epoch, cursor_id, pass_cursor, sequences,
                   last_loss, hold, weak_streak, last_error, weights_path, updated_at,
-                  burst_left, study_left, recent_losses
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  burst_left, study_left, recent_losses, replay_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -695,6 +780,7 @@ class MiniLMService:
                     self.burst_left,
                     self.study_left,
                     json.dumps(self.recent_losses),
+                    self.replay_id,
                 ),
             )
             return
@@ -703,7 +789,7 @@ class MiniLMService:
             UPDATE lm_state
             SET step=?, epoch=?, cursor_id=?, pass_cursor=?, sequences=?,
                 last_loss=?, hold=?, weak_streak=?, last_error=?, weights_path=?, updated_at=?,
-                burst_left=?, study_left=?, recent_losses=?
+                burst_left=?, study_left=?, recent_losses=?, replay_id=?
             WHERE run_id=?
             """,
             (
@@ -721,6 +807,7 @@ class MiniLMService:
                 self.burst_left,
                 self.study_left,
                 json.dumps(self.recent_losses),
+                self.replay_id,
                 run_id,
             ),
         )

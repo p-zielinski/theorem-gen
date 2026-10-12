@@ -501,6 +501,22 @@ class ModelTests(unittest.TestCase):
             self.assertEqual(adam.read_bytes(), b"kept")
             self.assertGreater(path.stat().st_size, 1000)
 
+    def test_empty_optimizer_leaves_do_not_block_the_adam_save(self):
+        from theorem_gen.learn.minilm import encode
+
+        trainer = Trainer(TINY, lr=1e-2)
+        row, length = encode("<|prove|>\nt\n<|end|>", TINY.context)
+        trainer.step([row], [length])
+        trainer.optimizer.state["absent"] = None
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "model.safetensors"
+            trainer.save(path)
+            restored = Trainer(TINY, lr=1e-2)
+            restored.load(path)
+            again = trainer.step([row], [length])
+            kept = restored.step([row], [length])
+        self.assertAlmostEqual(again, kept, places=5)
+
     def test_weights_without_adam_still_load(self):
         from theorem_gen.learn.minilm import encode
 

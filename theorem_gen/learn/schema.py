@@ -15,6 +15,9 @@ MIGRATIONS = (
     (8, "lean_ms", "008_lean_ms.sql"),
     (9, "context_block", "009_context_block.sql"),
     (10, "sample_burst", "010_sample_burst.sql"),
+    (11, "replay", "011_replay.sql"),
+    (12, "attempt_context", "012_attempt_context.sql"),
+    (13, "attempt_shape", "013_attempt_shape.sql"),
 )
 
 
