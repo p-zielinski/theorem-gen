@@ -1,20 +1,20 @@
-# Etap 0 — analiza i plan techniczny
+# Stage 0 — analysis and technical plan
 
-> Data: 2026-10-11
-> Status: ukończony
+> Date: 2026-10-11
+> Status: done
 
-## Środowisko
+## Environment
 
-Sprawdzone w katalogu repozytorium na maszynie `arm64`, Darwin 25.5.0:
+Checked in the repository directory on an `arm64` machine, Darwin 25.5.0:
 
-| Narzędzie | Wynik |
-|-----------|--------|
+| Tool | Result |
+|------|--------|
 | Python | 3.9.6, `/usr/bin/python3` |
-| git, curl, brew | dostępne |
-| `lean`, `lake`, `elan` w `PATH` | brak |
-| `~/.elan` | brak |
+| git, curl, brew | available |
+| `lean`, `lake`, `elan` on `PATH` | absent |
+| `~/.elan` | absent |
 
-Lean nie był zainstalowany globalnie. Żeby nie zmieniać konfiguracji powłoki, elan został zainstalowany lokalnie w projekcie:
+Lean was not installed globally. So the shell configuration would stay unchanged, elan was installed locally in the project:
 
 ```sh
 export ELAN_HOME="$PWD/.toolchains/elan"
@@ -22,83 +22,83 @@ curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf 
   | sh -s -- -y --default-toolchain leanprover/lean4:v4.34.1 --no-modify-path
 ```
 
-Po instalacji:
+After installation:
 
 - Lean 4.34.1 (`arm64-apple-darwin24.6.0`, commit `5045d0056413`)
 - Lake 5.0.0-src+5045d00
 
-Katalog `.toolchains/` jest w `.gitignore`. Plik `lean/lean-toolchain` przypina tę samą wersję, więc `lake` potrafi ją pobrać także przy globalnym elan.
+The `.toolchains/` directory is in `.gitignore`. `lean/lean-toolchain` pins the same version, so `lake` can fetch it with a global elan as well.
 
-## Sonda dialektu Lean 4.34
+## Lean 4.34 dialect probe
 
-Uruchomiono prawdziwy kompilator na krótkich plikach.
+The real compiler was run on short files.
 
-- `((2 + 3) = 5) := rfl`, `(((2 + 3) * 4) = 20) := rfl` i `((2 + 4) = (4 + 2)) := rfl` przechodzą.
-- `(2 <= 5)` i `(2 < 5)` przechodzą jako `:= by decide`.
-- `(1 = 0) := rfl` kończy się kodem 1. Komunikat zawiera `Not a definitional equality`, a potem osobną linię `Type mismatch` dla termu `rfl`. Klasyfikacja musi najpierw rozpoznać błąd dowodu, inaczej opisze go jako błąd typu.
-- `True + 1` kończy się kodem 1 i `failed to synthesize` / `synthInstanceFailed`.
-- Urwane `(1 = := rfl` kończy się kodem 1 i `unexpected token`.
-- `:= sorry` kończy się kodem 0 i ostrzeżeniem `declaration uses sorry`. Sam kod wyjścia nie wystarcza, żeby uznać dowód.
+- `((2 + 3) = 5) := rfl`, `(((2 + 3) * 4) = 20) := rfl`, and `((2 + 4) = (4 + 2)) := rfl` pass.
+- `(2 <= 5)` and `(2 < 5)` pass as `:= by decide`.
+- `(1 = 0) := rfl` exits 1. The message contains `Not a definitional equality`, then a separate line `Type mismatch` for the term `rfl`. Classification must recognize a proof error first, or it will describe it as a type error.
+- `True + 1` exits 1 with `failed to synthesize` / `synthInstanceFailed`.
+- A cut-off `(1 = := rfl` exits 1 with `unexpected token`.
+- `:= sorry` exits 0 with the warning `declaration uses sorry`. The exit code alone is not enough to accept a proof.
 
-Na tym macOS `resource.setrlimit(RLIMIT_AS, ...)` w Pythonie 3.9 rzuca `ValueError` (`RLIMIT_AS` i `RLIMIT_RSS` mają ten sam numer). Limit pamięci wirtualnej nie jest używany. Zostają limit czasu ściennego i `RLIMIT_CPU` w procesie potomnym.
+On this macOS, `resource.setrlimit(RLIMIT_AS, ...)` in Python 3.9 raises `ValueError` (`RLIMIT_AS` and `RLIMIT_RSS` share a number). A virtual-memory limit is not used. What remains is a wall-clock limit and `RLIMIT_CPU` in the child process.
 
-## Podział Python / Lean
+## Python / Lean split
 
-Python trzyma generator, typowane drzewo, ziarno, eksport ograniczonego podzbioru i uruchomienie procesu. Testy tej części nie wymagają kompilatora.
+Python holds the generator, the typed tree, the seed, export of a bounded subset, and launching the process. Tests of that part do not need the compiler.
 
-Lean 4 jest jedynym sędzią poprawności dowodu. Nie ma własnego parsera Leana ani heurystyki, która z tekstu komunikatu wnioskuje, że twierdzenie jest prawdziwe. Tekst komunikatu służy tylko do opisu błędu i do odrzucenia `sorry`, które kompilator i tak akceptuje z kodem 0.
+Lean 4 is the only judge of a proof. There is no Lean parser of our own, and no heuristic that reads an error message and concludes the theorem is true. The message text is used only to describe an error and to reject `sorry`, which the compiler accepts with exit code 0.
 
-Mathlib nie wchodzi do etapu 1. Konkretne twierdzenia o `Nat` z `+`, `*` i porównaniami mieszczą się w prelude.
+Mathlib is not part of stage 1. Concrete theorems about `Nat` with `+`, `*`, and comparisons fit in the prelude.
 
-## Minimalny zakres etapu 1
+## Minimum scope of stage 1
 
-Jest w kodzie:
+In the code:
 
-- literały `Nat`, dodawanie, mnożenie, `=`, `<=`, `<`
-- twierdzenie konkretne: wyrażenie typu `Prop` plus metoda dowodu `rfl` albo `decide`
-- generator sterowany ziarnem i konfiguracją
-- eksport modułu Lean
-- weryfikacja procesem `lake env lean` z limitem czasu
+- `Nat` literals, addition, multiplication, `=`, `<=`, `<`
+- a concrete theorem: a `Prop` expression plus a proof method `rfl` or `decide`
+- a generator driven by a seed and a configuration
+- export of a Lean module
+- verification by a `lake env lean` process with a time limit
 
-Poza zakresem etapu 0, dopisane później w etapach 2–8:
+Outside stage 0, added later in stages 2–8:
 
-- zmienne, kwantyfikatory, implikacje
-- szersze AST
-- rejestr zależności i cykle
-- sterowanie złożonością
-- definicje
-- hipotezy
-- otwarta eksploracja
+- variables, quantifiers, implications
+- a wider AST
+- a dependency registry and cycles
+- complexity control
+- definitions
+- hypotheses
+- open exploration
 
-W samym etapie 1 eksporter przyjmował rodzaj `concrete`. Późniejsze rodzaje mają własne ścieżki eksportu i nie są cicho tłumaczone na konkretny dowód.
+In stage 1 itself the exporter accepted the kind `concrete`. Later kinds have their own export paths and are not quietly translated into a concrete proof.
 
-## Struktura katalogów
+## Directory layout
 
 ```
-theorem_gen/          generator w Pythonie
+theorem_gen/          the generator in Python
 tests/                unittest
-lean/                 projekt Lake (weryfikacja)
-docs/                 architektura, etapy, raporty
-.toolchains/elan/     lokalny Lean, poza gitem
+lean/                 Lake project (verification)
+docs/                 architecture, stages, reports
+.toolchains/elan/     local Lean, outside git
 ```
 
-## Interfejs
+## Interface
 
-Konfiguracja `GeneratorConfig`: `seed`, `count`, `max_literal`, `max_depth`, `max_value`, `unique`, `rules`, `max_attempts`.
+`GeneratorConfig`: `seed`, `count`, `max_literal`, `max_depth`, `max_value`, `unique`, `rules`, `max_attempts`.
 
-`generate(config)` zwraca listę twierdzeń. Ten sam config daje ten sam wynik. Przy jednej regule generator nie zużywa losowania na jej wybór. Generator liczb to 32-bitowy LCG (mnożnik `1664525`, przyrost `1013904223`), niezależny od wersji `random` w Pythonie.
+`generate(config)` returns a list of theorems. The same config gives the same result. With one rule the generator does not spend a draw on choosing it. The number generator is a 32-bit LCG (multiplier `1664525`, increment `1013904223`), independent of Python's `random`.
 
-Eksport: `export_module(theorems, config)` — plik z komentarzem konfiguracji i twierdzeniami.
+Export: `export_module(theorems, config)` — a file with a configuration comment and the theorems.
 
-Weryfikacja: `verify_source` / `verify_theorems`. Statusy: `proved`, `failed`, `timeout`, `unavailable`. Klasa błędu, gdy status to `failed`: `syntax`, `typing`, `proof`, `rejected`, `other`.
+Verification: `verify_source` / `verify_theorems`. Statuses: `proved`, `failed`, `timeout`, `unavailable`. Failure class when the status is `failed`: `syntax`, `typing`, `proof`, `rejected`, `other`.
 
-Uruchomienie testów z katalogu repozytorium:
+Running tests from the repository root:
 
 ```sh
 python3 -m unittest discover -s tests -v
 ```
 
-Przykład:
+Example:
 
 ```sh
 export ELAN_HOME="$PWD/.toolchains/elan"
@@ -106,8 +106,8 @@ export PATH="$ELAN_HOME/bin:$PATH"
 python3 -m theorem_gen generate --seed 1 --count 8 --out lean/TheoremGen/Generated.lean --verify
 ```
 
-## Kryteria ukończenia
+## Completion criteria
 
-Zapisane w [stages.md](stages.md). Etap 0 jest zamknięty tą notatką i
-[architecture.md](architecture.md). Etap 1 został następnie zrealizowany i
-opisany w [stage-1.md](stage-1.md).
+Recorded in [stages.md](stages.md). Stage 0 is closed by this note and
+[architecture.md](architecture.md). Stage 1 was then built and
+described in [stage-1.md](stage-1.md).

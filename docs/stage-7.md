@@ -1,37 +1,37 @@
-# Etap 7 — hipotezy
+# Stage 7 — hypotheses
 
-> Data ukończenia: 2026-10-11
-> Status: ukończony
+> Completed: 2026-10-11
+> Status: done
 
-## 1. Zaimplementowany zakres
+## 1. What was implemented
 
-`assess_hypothesis` zwraca jeden ze statusów:
+`assess_hypothesis` returns one of these statuses:
 
-| Status | Kiedy |
-|--------|--------|
-| `proved` | podano dowód i weryfikacja Leana ma status `proved` |
-| `refuted` | skończone przeszukanie znalazło kontrprzykład |
-| `unresolved` | nie ma kontrprzykładu i nie ma przyjętego dowodu |
-| `invalid_syntax` | błąd składni źródła |
-| `invalid_type` | zdanie nie jest poprawnie otypowanym `Prop` albo Lean zgłosił błąd typu |
+| Status | When |
+|--------|------|
+| `proved` | a proof was supplied and the Lean verification has status `proved` |
+| `refuted` | a finite search found a counterexample |
+| `unresolved` | there is no counterexample and no accepted proof |
+| `invalid_syntax` | a syntax error in the source |
+| `invalid_type` | the sentence is not a well-typed `Prop`, or Lean reported a type error |
 
-Kontrprzykład jest sprawdzany przed zadeklarowanym dowodem. Fałszywe `1 = 0` z podrobionym statusem `proved` pozostaje `refuted`.
+The counterexample is checked before a declared proof. A false `1 = 0` with a forged `proved` status stays `refuted`.
 
-Przeszukanie podstawia `Nat` od 0 do `search_bound` włącznie. `∀ a, a < a` daje świadka `a = 0`. `∀ a, a + a = a` przy granicy 0 zostaje `unresolved`, bo `0 + 0 = 0` nie jest kontrprzykładem; przy granicy 1 świadkiem jest `a = 1`. Brak świadka nie jest dowodem prawdy. Nieudany dowód źródła bez drzewa też nie jest fałszem: komunikat mówi wprost, że porażka dowodu nie ustala fałszywości.
+The search substitutes `Nat` from 0 through `search_bound` inclusive. `∀ a, a < a` gives the witness `a = 0`. `∀ a, a + a = a` at bound 0 stays `unresolved`, because `0 + 0 = 0` is not a counterexample; at bound 1 the witness is `a = 1`. No witness is not a proof of truth. A failed proof of a source with no tree is not falsehood either: the message says outright that a proof failure does not establish falsehood.
 
-Zamknięte porównania `Int` są liczone bezpośrednio. `(1 + -1) = 1` jest obalone, a `(1 + -1) = 0` bez dowodu zostaje `unresolved`.
+Closed `Int` comparisons are evaluated directly. `(1 + -1) = 1` is refuted, and `(1 + -1) = 0` with no proof stays `unresolved`.
 
-`limit_repetition` zwija zdania o tym samym kluczu strukturalnym. `diversity_metrics` podaje liczbę, liczbę unikalnych, iloraz i entropię kształtu według klasy korzenia. Pusty zbiór ma iloraz 1 i entropię 0.
+`limit_repetition` folds sentences with the same structural key. `diversity_metrics` reports the count, the unique count, the ratio, and the shape entropy by root class. An empty set has ratio 1 and entropy 0.
 
-Lean dla `theorem witness : (0 < 0) := by decide` zwraca `failed` / `proof`, bo taktyka wykazała, że zdanie jest fałszywe (`proved that the proposition`).
+Lean for `theorem witness : (0 < 0) := by decide` returns `failed` / `proof`, because the tactic showed the sentence is false (`proved that the proposition`).
 
-## 2. Testy
+## 2. Tests
 
-`tests/test_stage7.py` oraz `test_concrete_false_comparison_is_a_proof_failure` i dopisek w `tests/test_verify.py` dla komunikatu `decide`.
+`tests/test_stage7.py`, plus `test_concrete_false_comparison_is_a_proof_failure` and an addition in `tests/test_verify.py` for the `decide` message.
 
-## 3. Polecenia i wyniki
+## 3. Commands and results
 
-Wspólny przebieg jest w [stage-8.md](stage-8.md). Rzeczywisty komunikat Leana dla `0 < 0`:
+The shared run is in [stage-8.md](stage-8.md). The real Lean message for `0 < 0`:
 
 ```text
 error: Tactic `decide` proved that the proposition
@@ -39,16 +39,16 @@ error: Tactic `decide` proved that the proposition
 is false
 ```
 
-Klasyfikator przypisuje go do `proof`, nie do `other`.
+The classifier assigns it to `proof`, not to `other`.
 
-## 4. Ograniczenia
+## 4. Limits
 
-Przeszukanie kwantyfikatorów obejmuje tylko bindery `Nat`. Zdanie, którego po podstawieniu nie da się policzyć, nie jest obalane; szukanie kończy się brakiem świadka. To nie jest rozstrzygnięcie dla dowolnej arytmetyki. Entropia kształtu grupuje po klasie korzenia, więc dwa różne porównania `Compare` mają ten sam kształt; powtórzenia łapie osobno klucz strukturalny.
+The quantifier search covers only `Nat` binders. A sentence that cannot be evaluated after substitution is not refuted; the search ends with no witness. This is not a decision procedure for arbitrary arithmetic. Shape entropy groups by root class, so two different `Compare` comparisons have the same shape; repeats are caught separately by the structural key.
 
-## 5. Ocena kryteriów
+## 5. Criteria
 
-Kryterium etapu 7 jest spełnione: hipoteza może być udowodniona, obalona, nierozstrzygnięta albo błędna składniowo lub typowo. Brak dowodu nie jest fałszem. Jest pomiar powtórzeń i różnorodności.
+The stage 7 criterion is met: a hypothesis can be proved, refuted, left unresolved, or rejected as bad syntax or a bad type. Lack of a proof is not falsehood. There is a measurement of repeats and diversity.
 
-## 6. Następny krok
+## 6. Next step
 
-Etap 8 miesza te werdykty w jednej eksploracji i zostawia zdania nierozstrzygnięte.
+Stage 8 mixes these verdicts in one exploration and leaves sentences unresolved.

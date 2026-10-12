@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 
 from theorem_gen.complexity import measure_expr
@@ -81,16 +83,165 @@ class BatchItem:
     ancestor_stable_id: str = None
     needs_roles: bool = False
     rules: tuple = field(default_factory=tuple)
+    lean_source: str = ""
 
 
-def build_batch(level: int, *, seed: int, count: int, batch_index: int = 0, run_id: str = "") -> tuple:
+# Shifts the review generator off the forward batch so the same index is a new row.
+_REVIEW_SEED = 1_000_003
+
+
+def rich_items(seed: int, batch_index: int, run_id: str, seen) -> tuple:
+    """One equational theorem for this batch, unless that statement is already stored."""
+    from theorem_gen.richgen import rich_theorem
+
+    theorem = rich_theorem(seed, batch_index)
+    digest = hashlib.sha256(theorem.statement.encode("utf-8")).hexdigest()
+    if digest in set(seen):
+        return ()
+    return (
+        BatchItem(
+            stable_id=_scoped(run_id, f"richgen:{seed}:{batch_index}"),
+            candidate_kind="theorem",
+            canonical_ast_json=json.dumps(
+                {"generator": "richgen", "statement": theorem.statement},
+                sort_keys=True,
+            ),
+            structural_hash=digest,
+            family=theorem.family,
+            proof_method=theorem.proof_method,
+            ast_size=theorem.size,
+            depth=theorem.depth,
+            dependency_depth=0,
+            provenance={
+                "origin": "generator",
+                "generator": "richgen",
+                "rule": theorem.family,
+                "seed": seed,
+                "batch_index": batch_index,
+            },
+            validation_type="proof",
+            lean_source=theorem.source,
+            needs_roles=False,
+        ),
+    )
+
+
+def review_level_for(level: int, batch_index: int):
+    """Lower level rehearsed by this batch. Level 1 has nothing earlier to repeat."""
+    capabilities(level)
+    if isinstance(batch_index, bool) or not isinstance(batch_index, int) or batch_index < 0:
+        raise LearnError("batch_index must be >= 0")
+    if level == 1:
+        return None
+    return (batch_index % (level - 1)) + 1
+
+
+def review_items(
+    level: int,
+    *,
+    seed: int,
+    count: int,
+    batch_index: int = 0,
+    run_id: str = "",
+    seen=(),
+) -> tuple:
+    """A rotating slice of an earlier level, tagged so the promotion gate ignores it.
+
+    Half of `count`, and at least one when `count` is positive. Statements
+    already stored for the run are skipped. The lower batch may add that
+    level's whole surface on top of the half.
+    """
+    source = review_level_for(level, batch_index)
+    if source is None or count <= 0:
+        return ()
+    review_count = max(1, count // 2)
+    items = novel_batch(
+        source,
+        seed=seed + _REVIEW_SEED * source,
+        count=review_count,
+        batch_index=batch_index,
+        run_id=run_id,
+        seen=seen,
+    )
+    return _tag_review(list(items), source, batch_index)
+
+
+def novel_batch(
+    level: int,
+    *,
+    seed: int,
+    count: int,
+    batch_index: int = 0,
+    run_id: str = "",
+    seen=(),
+) -> tuple:
+    """A batch whose statements are not already in `seen`.
+
+    The default literal cap is 0..9. When that surface is already stored, the
+    next draw raises the cap by 10. Depth stays 2. This does not change
+    `python3 -m theorem_gen generate`.
+    """
+    if count <= 0:
+        return ()
+    blocked = set(seen)
+    chosen = []
+    chosen_hashes = set()
+    target = max(count, 1)
+    for step in range(8):
+        items = build_batch(
+            level,
+            seed=seed + step * _REVIEW_SEED,
+            count=count,
+            batch_index=batch_index,
+            run_id=run_id,
+            max_literal=9 + 10 * step,
+        )
+        for item in items:
+            if item.structural_hash in blocked or item.structural_hash in chosen_hashes:
+                continue
+            chosen_hashes.add(item.structural_hash)
+            chosen.append(item)
+        if len(chosen) >= target:
+            break
+    return tuple(chosen)
+
+
+def _tag_review(items, source_level: int, batch_index: int) -> tuple:
+    renamed = {}
+    for item in items:
+        previous = item.stable_id
+        item.stable_id = f"{previous}:review:{source_level}:{batch_index}"
+        renamed[previous] = item.stable_id
+        item.needs_roles = False
+        item.provenance = dict(item.provenance)
+        item.provenance["review"] = True
+        item.provenance["source_level"] = source_level
+    for item in items:
+        item.depends_on = tuple(renamed.get(dep, dep) for dep in item.depends_on)
+        item.registry_deps = tuple(renamed.get(dep, dep) for dep in item.registry_deps)
+    return tuple(items)
+
+
+def build_batch(
+    level: int,
+    *,
+    seed: int,
+    count: int,
+    batch_index: int = 0,
+    run_id: str = "",
+    max_literal: int = None,
+) -> tuple:
     allowed = capabilities(level)
     item_seed = seed + batch_index
     items = []
     if "concrete" in allowed:
         items.extend(
             _from_theorems(
-                generate(_generator_config(item_seed, count, level, rules=None)),
+                generate(
+                    _generator_config(
+                        item_seed, count, level, rules=None, max_literal=max_literal
+                    )
+                ),
                 generator="generate",
                 seed=item_seed,
                 batch_index=batch_index,
@@ -101,7 +252,11 @@ def build_batch(level: int, *, seed: int, count: int, batch_index: int = 0, run_
     if "general" in allowed:
         items.extend(
             _from_theorems(
-                generate_general(_generator_config(item_seed, count, level, rules=None)),
+                generate_general(
+                    _generator_config(
+                        item_seed, count, level, rules=None, max_literal=max_literal
+                    )
+                ),
                 generator="generate_general",
                 seed=item_seed,
                 batch_index=batch_index,
@@ -129,6 +284,9 @@ def build_batch(level: int, *, seed: int, count: int, batch_index: int = 0, run_
 
 
 def source_for(item: BatchItem) -> str:
+    if item.lean_source:
+        text = item.lean_source
+        return text if text.endswith("\n") else text + "\n"
     if item.definition is not None and item.theorem is None:
         return export_library(
             (item.definition,),
@@ -142,9 +300,18 @@ def source_for(item: BatchItem) -> str:
     )
 
 
-def _generator_config(seed: int, count: int, level: int, *, rules) -> GeneratorConfig:
+def _generator_config(seed: int, count: int, level: int, *, rules, max_literal=None) -> GeneratorConfig:
     bounds = WIDE_BOUNDS if "complexity" in capabilities(level) else None
-    return GeneratorConfig(seed=seed, count=count, rules=rules, complexity_bounds=bounds)
+    kwargs = {}
+    if max_literal is not None:
+        kwargs["max_literal"] = max_literal
+    return GeneratorConfig(
+        seed=seed,
+        count=count,
+        rules=rules,
+        complexity_bounds=bounds,
+        **kwargs,
+    )
 
 
 def _from_theorems(theorems, *, generator: str, seed: int, batch_index: int, level: int, run_id: str = "") -> list:
@@ -167,6 +334,7 @@ def _from_theorems(theorems, *, generator: str, seed: int, batch_index: int, lev
                 depth=measures["depth"],
                 dependency_depth=0,
                 provenance={
+                    "origin": "generator",
                     "generator": generator,
                     "rule": rule,
                     "seed": seed,
@@ -229,6 +397,7 @@ def _definitions(level: int, run_id: str = "") -> list:
         depth=body_measures["depth"],
         dependency_depth=0,
         provenance={
+            "origin": "generator",
             "generator": "definitions",
             "rule": "define",
             "level": level,

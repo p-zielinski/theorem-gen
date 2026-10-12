@@ -1,111 +1,103 @@
-# Architektura
+# Architecture
 
-> Ostatnia aktualizacja: 2026-10-11
-> Obowiązujący zakres kodu: etapy 0–8. Domyślna ścieżka CLI nadal generuje konkretne twierdzenia etapu 1. Osobna pętla z SQLite jest w `docs/continuous-ai-architecture.md` i nie zmienia tego kontraktu.
+> Last updated: 2026-10-11
+> Code in force: stages 0–8. The default CLI path still generates the concrete theorems of stage 1. A separate SQLite loop is described in `docs/continuous-ai-architecture.md` and does not change this contract. That loop trains its own transformer on sentences Lean has accepted and may append equations from the model. The `proved` verdict still belongs to Lean.
 
-Generator składa twierdzenia jako drzewo, a nie jako sklejany tekst. Lean dostaje dopiero gotowy, wąski fragment języka i sam sprawdza dowód.
+The generator builds theorems as a tree, not as pasted text. Lean receives a finished, narrow fragment of the language and checks the proof itself.
 
 ```
 GeneratorConfig + LCG
         │
         ▼
-   reguły konstrukcji
+   construction rules
         │
         ▼
-  Compare : Prop          Metadata (id, kind, reguły, status)
+  Compare : Prop          Metadata (id, kind, rules, status)
         │
         ▼
-   eksport Lean 4  ──►  lake env lean  ──►  VerificationReport
+   Lean 4 export  ──►  lake env lean  ──►  VerificationReport
 ```
 
-## Moduły
+## Modules
 
-| Moduł | Rola |
-|-------|------|
-| `theorem_gen/rng.py` | LCG. Ta sama sekwencja na każdym CPythonie. |
-| `theorem_gen/expr.py` | AST: `Nat`, `Int`, zmienne, `succ`, `neg`, kwantyfikator, implikacja, atom. |
-| `theorem_gen/config.py` | `GeneratorConfig`, reguły konkretne i ogólne, granice złożoności. |
-| `theorem_gen/theorem.py` | Twierdzenie, opcjonalny dowód, metadane, `claimed_true`. |
-| `theorem_gen/export_lean.py` | Jedyny zapis składni Lean, także definicji i `#check`. |
-| `theorem_gen/generate.py` | Konkretne zdania o `Nat`. |
-| `theorem_gen/general.py` | Zdania uniwersalne, warunkowe i wyrażenia bez dowodu. |
-| `theorem_gen/complexity.py` | Miary strukturalne. |
-| `theorem_gen/registry.py` | Identyfikatory, zależności, cykle, replay. |
-| `theorem_gen/definitions.py` | Definicja `double` i twierdzenie, które z niej korzysta. |
-| `theorem_gen/hypothesis.py` | Ocena hipotezy osobno od generowania. |
-| `theorem_gen/explore.py` | Cztery szablony eksploracji i cztery różne werdykty. |
-| `theorem_gen/verify.py` | Proces Leana, limity, klasyfikacja wyniku. |
-| `theorem_gen/__main__.py` | CLI `generate`. |
-| `lean/` | Projekt Lake bez Mathlib. |
+| Module | Role |
+|--------|------|
+| `theorem_gen/rng.py` | LCG. The same sequence on every CPython. |
+| `theorem_gen/expr.py` | AST: `Nat`, `Int`, variables, `succ`, `neg`, quantifier, implication, atom. |
+| `theorem_gen/config.py` | `GeneratorConfig`, concrete and general rules, complexity bounds. |
+| `theorem_gen/theorem.py` | Theorem, optional proof, metadata, `claimed_true`. |
+| `theorem_gen/export_lean.py` | The only writer of Lean syntax, including definitions and `#check`. |
+| `theorem_gen/generate.py` | Concrete sentences about `Nat`. |
+| `theorem_gen/general.py` | Universal sentences, conditionals, and expressions with no proof. |
+| `theorem_gen/complexity.py` | Structural measures. |
+| `theorem_gen/registry.py` | Identifiers, dependencies, cycles, replay. |
+| `theorem_gen/definitions.py` | The `double` definition and a theorem that uses it. |
+| `theorem_gen/hypothesis.py` | Hypothesis assessment, separate from generation. |
+| `theorem_gen/explore.py` | Four exploration templates and four different verdicts. |
+| `theorem_gen/verify.py` | The Lean process, limits, result classification. |
+| `theorem_gen/__main__.py` | The `generate` CLI. |
+| `lean/` | A Lake project without Mathlib. |
 
-## Typy etapu 1
+## Stage 1 types
 
-- `Nat`: literał nieujemny albo `+` / `*` dwóch wyrażeń `Nat`.
-- `Prop`: porównanie dwóch wyrażeń `Nat` (`=`, `<=`, `<`).
+- `Nat`: a non-negative literal, or `+` / `*` of two `Nat` expressions.
+- `Prop`: a comparison of two `Nat` expressions (`=`, `<=`, `<`).
 
-Konstruktor odrzuca literał ujemny, wartość `bool`, obcy operator i dziecko złego typu. Eksporter nie naprawia takiego drzewa, bo drzewo w ogóle nie powstaje. Fałszywe, ale poprawnie otypowane zdanie (`1 = 0`) da się wyeksportować bez zmiany znaczenia; generator sam go nie tworzy. Odrzuca je Lean.
+The constructor rejects a negative literal, a `bool` value, a foreign operator, and a child of the wrong type. The exporter does not repair such a tree, because the tree is never built. A false but well-typed sentence (`1 = 0`) can be exported without changing its meaning; the generator itself does not create it. Lean rejects it.
 
-## Dowód
+## Proof
 
-| Zdanie | Metoda w generatorze | Lean |
-|--------|----------------------|------|
-| równość konkretnych `Nat` z `+` i `*` | `rfl` | równość definicyjna |
-| `<=`, `<` | `by decide` | rozstrzygalne porównanie |
+| Sentence | Method in the generator | Lean |
+|----------|-------------------------|------|
+| equality of concrete `Nat` with `+` and `*` | `rfl` | definitional equality |
+| `<=`, `<` | `by decide` | decidable comparison |
 
-Eksporter wypisuje metodę, którą dostał. Nie podmienia `rfl` na `decide` ani odwrotnie. `sorry` nie jest metodą dowodu.
+The exporter prints the method it was given. It does not swap `rfl` for `decide` or the reverse. `sorry` is not a proof method.
 
 ## Generator
 
-Reguły: `eval_eq`, `add_zero`, `zero_add`, `mul_one`, `one_mul`, `mul_zero`, `zero_mul`, `add_comm`, `mul_comm`, `le_between`, `lt_between`, `le_refl`.
+Rules: `eval_eq`, `add_zero`, `zero_add`, `mul_one`, `one_mul`, `mul_zero`, `zero_mul`, `add_comm`, `mul_comm`, `le_between`, `lt_between`, `le_refl`.
 
-Kandydat odpada, gdy reguła nie stosuje się do granic (na przykład `a < b` przy `max_literal = 0`), gdy któraś strona przekracza `max_value`, albo gdy `unique` widzi powtórzony klucz strukturalny. Po wyczerpaniu prób powstaje `GenerationError`. To limit konfiguracji, nie werdykt o fałszywości zdania.
+A candidate is dropped when a rule does not apply inside the bounds (for example `a < b` at `max_literal = 0`), when either side exceeds `max_value`, or when `unique` sees a repeated structural key. After the attempts run out, the result is `GenerationError`. That is a configuration limit, not a verdict that the sentence is false.
 
-Identyfikator `gen_s<seed>_<index>` jest stabilny dla pozycji w wyniku. Ujemne ziarno dostaje token `neg`.
+The identifier `gen_s<seed>_<index>` is stable for a position in the result. A negative seed gets the token `neg`.
 
-## Weryfikacja
+## Verification
 
-Polecenie, bez powłoki:
+The command, with no shell:
 
 ```text
-lake --dir <projekt> env lean <plik>
+lake --dir <project> env lean <file>
 ```
 
-- kod 0 i brak ostrzeżenia `sorry` → `proved`
-- kod 0 i `declaration uses sorry` → `failed` / `proof`
-- kod dodatni → `failed` oraz klasa: `proof`, `syntax`, `typing` albo `other`
-- timeout albo kod ujemny (proces zabity przez limit) → `timeout`, wynik nierozstrzygnięty
-- brak `lake` lub błąd uruchomienia → `unavailable`
+- exit 0 and no `sorry` warning → `proved`
+- exit 0 and `declaration uses sorry` → `failed` / `proof`
+- a positive exit code → `failed` and a class: `proof`, `syntax`, `typing`, or `other`
+- timeout or a negative exit code (the process was killed by a limit) → `timeout`, an undecided result
+- no `lake`, or a launch error → `unavailable`
 
-Przed startem procesu odrzucane są fragmenty spoza etapu 1, które mogłyby coś wykonać albo uznać niedokończony dowód: `#eval`, `run_io`, `run_cmd`, `sorry`, `unsafe`, `axiom`, `opaque`. To bramka bezpieczeństwa, nie sprawdzanie prawdy.
+Before the process starts, fragments outside stage 1 that could execute something or accept an unfinished proof are rejected: `#eval`, `run_io`, `run_cmd`, `sorry`, `unsafe`, `axiom`, `opaque`. That is a safety gate, not a check of truth.
 
-Limit czasu jest parametrem. Proces dostaje własną grupę, więc timeout zabija także dzieci `lake`. Dodatkowo ustawiany jest `RLIMIT_CPU`. `RLIMIT_AS` na tym interpreterze nie działa (etap 0).
+The time limit is a parameter. The process gets its own group, so a timeout also kills `lake`'s children. `RLIMIT_CPU` is set as well. `RLIMIT_AS` does not work on this interpreter (stage 0).
 
-`verify_source` jest interfejsem dla zaufanego kodu utworzonego przez eksporter
-etapu 1, nie sandboxem dla dowolnego kodu Lean. Eksporter nie wypisuje importów,
-komend ani własnych deklaracji poza twierdzeniami. Przed uruchomieniem ścieżki
-projektu i pliku są zamieniane na absolutne, żeby zmiana `cwd` procesu Lake nie
-zmieniała wskazanego pliku.
+`verify_source` is an interface for trusted code produced by the stage 1 exporter, not a sandbox for arbitrary Lean. The exporter does not print imports, commands, or declarations of its own beyond theorems. Before launch, the project path and the file path are made absolute, so a change of the Lake process `cwd` does not change the file that was named.
 
-Status weryfikacji dopisywany jest do kopii metadanych. Obiekty zwrócone przez generator pozostają `unverified`, dopóki ktoś nie uruchomi Leana.
+The verification status is written onto a copy of the metadata. Objects returned by the generator stay `unverified` until someone runs Lean.
 
-## Format pliku
+## File format
 
-Nagłówek powtarza ziarno, liczbę twierdzeń i parametry konfiguracji. Treść to wyłącznie twierdzenia `rfl` i `decide`. Odtworzenie pliku wymaga tego samego kodu generatora, tego samego configu i tego samego LCG.
+The header repeats the seed, the theorem count, and the configuration parameters. The body is only `rfl` and `decide` theorems. Reproducing the file requires the same generator code, the same config, and the same LCG.
 
-## Po etapie 1
+## After stage 1
 
-Konkretny generator nie losuje zmiennych. Ogólne zdania powstają w `generate_general`, definicje w `definitions`, a otwarte wyniki w `explore`. Eksporter nadal odrzuca rodzaj, którego nie umie zapisać. `verify_theorems` dopisuje status Leana tylko do twierdzeń, które mają dowód.
+The concrete generator does not draw variables. General sentences are built in `generate_general`, definitions in `definitions`, and open results in `explore`. The exporter still rejects a kind it does not know how to write. `verify_theorems` attaches a Lean status only to theorems that have a proof.
 
-Cztery werdykty eksploracji są rozłączne: cytowanie lematu, kontrprzykład, brak dowodu oraz brak reguły dla atomu w tym fragmencie. Timeout procesu Leana pozostaje wynikiem nierozstrzygniętym i nie jest fałszem.
+The four exploration verdicts are disjoint: citing a lemma, a counterexample, no proof, and no rule for an atom in this fragment. A Lean process timeout stays an undecided result and is not falsehood.
 
-`ExplorationResult.status == "proved"` oznacza tylko cytowanie lematu
-(`discovered=False`). To nie jest `claimed_true` i nie zastępuje
-`VerificationReport.status` po `verify_source`. Filtr złożoności dla
-`generate` i `generate_general` idzie przez wspólne
-`complexity.candidate_within_bounds`.
+`ExplorationResult.status == "proved"` means only that a lemma was cited (`discovered=False`). That is not `claimed_true` and it does not replace `VerificationReport.status` after `verify_source`. The complexity filter for `generate` and `generate_general` goes through the shared `complexity.candidate_within_bounds`.
 
-## Rozszerzanie
+## Extending
 
-Nowa konstrukcja powinna dostać wariant drzewa, test typowania, test eksportu i test Leana. Nie należy zmieniać po cichu konkretnych twierdzeń etapu 1 ani złotego pliku `lean/TheoremGen/Generated.lean`.
+A new construction should get a tree variant, a typing test, an export test, and a Lean test. Do not quietly change the concrete theorems of stage 1 or the golden file `lean/TheoremGen/Generated.lean`.
 
-Pętla `theorem_gen.learn` dokłada kolejkę, checkpoint i status wyprowadzony z Leana. Jej opis, bramki curriculum i budżet RAM są w `docs/continuous-ai-architecture.md`.
+The `theorem_gen.learn` loop adds a queue, a checkpoint, and a status derived from Lean. Its description, curriculum gates, and RAM budget are in `docs/continuous-ai-architecture.md`.

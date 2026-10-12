@@ -387,3 +387,107 @@ WHEN NEW.stable_id != OLD.stable_id
 BEGIN
   SELECT RAISE(ABORT, 'candidate identity is immutable');
 END;
+-- Lean workers read nothing from SQLite. One writer keeps this file.
+-- train_items is the stoppable queue of Lean-labeled rows.
+-- online_weights is a small linear model, not a neural-net checkpoint.
+
+CREATE TABLE IF NOT EXISTS train_items (
+  id INTEGER PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES runs(run_id),
+  candidate_id INTEGER NOT NULL REFERENCES candidates(id),
+  label TEXT NOT NULL CHECK (label IN ('proved', 'refuted')),
+  state TEXT NOT NULL CHECK (state IN ('queued', 'done')),
+  idempotency_key TEXT NOT NULL UNIQUE,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_train_ready ON train_items(run_id, state, id);
+
+CREATE TABLE IF NOT EXISTS online_weights (
+  run_id TEXT PRIMARY KEY REFERENCES runs(run_id),
+  step INTEGER NOT NULL,
+  vector_json TEXT NOT NULL,
+  cursor_id INTEGER NOT NULL DEFAULT 0,
+  lean_workers INTEGER NOT NULL DEFAULT 1,
+  updated_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_candidates_run_id ON candidates(run_id, id);
+-- One progress row for 7B QLoRA. The Lean text stays where it already is.
+-- step is how many labeled examples have updated the adapter.
+-- cursor_id is the last candidate id already considered.
+-- Waiting is a count of later proved/refuted rows, not a second copy of them.
+
+CREATE TABLE IF NOT EXISTS qlora_state (
+  run_id TEXT PRIMARY KEY REFERENCES runs(run_id),
+  model_id TEXT NOT NULL,
+  step INTEGER NOT NULL,
+  cursor_id INTEGER NOT NULL DEFAULT 0,
+  last_loss REAL,
+  last_error TEXT,
+  adapter_path TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+-- Drop the Qwen QLoRA progress row. The 50M transformer keeps one progress
+-- row plus the short equations it actually sampled. The corpus stays in
+-- candidates and queue_jobs.
+
+DROP TABLE IF EXISTS qlora_state;
+
+CREATE TABLE IF NOT EXISTS lm_state (
+  run_id TEXT PRIMARY KEY REFERENCES runs(run_id),
+  step INTEGER NOT NULL,
+  epoch INTEGER NOT NULL,
+  cursor_id INTEGER NOT NULL DEFAULT 0,
+  pass_cursor INTEGER NOT NULL DEFAULT 0,
+  sequences INTEGER NOT NULL DEFAULT 0,
+  last_loss REAL,
+  hold INTEGER NOT NULL DEFAULT 0 CHECK (hold IN (0, 1)),
+  weak_streak INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  weights_path TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS model_attempts (
+  id INTEGER PRIMARY KEY,
+  run_id TEXT NOT NULL REFERENCES runs(run_id),
+  equation TEXT NOT NULL,
+  equation_hash TEXT NOT NULL,
+  origin TEXT NOT NULL CHECK (origin IN ('model')),
+  disposition TEXT NOT NULL CHECK (
+    disposition IN ('duplicate', 'queued', 'proved', 'unresolved', 'ill_formed', 'refuted')
+  ),
+  candidate_id INTEGER REFERENCES candidates(id),
+  created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_model_attempts_run_hash
+  ON model_attempts(run_id, equation_hash);
+-- Wall time of one Lean check. Older rows stay NULL.
+-- Validations remain append-only; this column is set on insert.
+
+ALTER TABLE validations ADD COLUMN lean_ms INTEGER;
+-- A proved sentence that does not fit in the model window, including the
+-- role mark and the end mark. It stays here until a larger window can hold it.
+
+CREATE TABLE IF NOT EXISTS context_blocks (
+  run_id TEXT NOT NULL REFERENCES runs(run_id),
+  candidate_id INTEGER NOT NULL REFERENCES candidates(id),
+  token_length INTEGER NOT NULL,
+  context_limit INTEGER NOT NULL,
+  status TEXT NOT NULL CHECK (status = 'blocked by context limit'),
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (run_id, candidate_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_context_blocks_ready
+  ON context_blocks(run_id, token_length, candidate_id);
+-- How many of the current 10 model equations are still owed, how many
+-- training steps remain before another batch, and the last 10 losses.
+
+ALTER TABLE lm_state ADD COLUMN burst_left INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE lm_state ADD COLUMN study_left INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE lm_state ADD COLUMN recent_losses TEXT NOT NULL DEFAULT '[]';

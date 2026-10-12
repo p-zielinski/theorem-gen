@@ -1,84 +1,84 @@
-# Prompt: ciągle rozwijane AI nad generatorem Lean 4
+# Prompt: a continuously developed AI on top of the Lean 4 generator
 
-Skopiuj cały blok poniżej (od `Jesteś senior engineerem…` do końca bloku) jako pełne polecenie implementacyjne. Ten prompt **nie** obiecuje, że model „rozwiąże każdą matematykę”. Buduje system, który może się uczyć długo, z pauzą/wznowieniem, Leanem jako arbitrem i SQLite jako pamięcią.
+Copy the whole block below (from `You are a senior engineer…` through the end of the block) as the full implementation instruction. This prompt does not promise that the model will "solve all of mathematics". It builds a system that can learn for a long time, with pause and resume, Lean as the arbiter, and SQLite as the memory.
 
-Uwaga dla autorów Markdown: blok jest w fence `text` czterema backtickami, żeby wewnętrzne przykłady poleceń nie ucinały copy-paste.
+Note for Markdown authors: the block is in a `text` fence of four backticks, so inner command examples do not cut copy-paste.
 
 ````text
-Jesteś senior engineerem Python + Lean 4 + ML systems.
-Rozszerz istniejący projekt w bieżącym katalogu repozytorium (root z docs/,
-theorem_gen/, tests/, lean/). Nie zakładaj absolutnej ścieżki użytkownika.
+You are a senior engineer in Python + Lean 4 + ML systems.
+Extend the existing project in the current repository directory (the root with docs/,
+theorem_gen/, tests/, lean/). Do not assume an absolute user path.
 
-Cel długoterminowy: model AI, który ciągle się uczy na pętli
-generowanie → walidacja Lean 4 → klasyfikacja wyniku → zapis w SQLite,
-z możliwością zatrzymania i wznowienia w dowolnym momencie.
-Docelowa aspiracja (po bardzo długiej nauce): coraz lepsze rozwiązywanie
-zadań matematycznych i hipotez. NIE twierdź, że system już to umie.
-Nie obiecuj pełnej automatyzacji ani „rozwiąże każdą hipotezę”.
+Long-term goal: an AI model that keeps learning on the loop
+generation → Lean 4 validation → result classification → SQLite storage,
+and that can be stopped and resumed at any moment.
+The aspiration, after a very long training: steadily better solving of
+mathematical tasks and hypotheses. Do NOT claim the system already can.
+Do not promise full automation or that it "will solve every hypothesis".
 
-## Kontekst istniejącego kodu (zachowaj)
+## Existing code to keep
 
-- Traktuj etapy 0–8 jako bazę TYLKO po zielonym audycie z lake
-  (nie incomplete_without_lean). W przeciwnym razie najpierw napraw bazę
-  albo uruchom docs/prompts/audit-lean-generator.md.
-- Python buduje typowane AST; Lean 4.34.1 sprawdza dowody (bez Mathlib).
-- Domyślny CLI generate() nadal produkuje konkretne Nat.
-- Istnieją: generate, generate_general, registry, complexity, definitions,
+- Treat stages 0–8 as the base ONLY after a green audit with lake
+  (not incomplete_without_lean). Otherwise fix the base first
+  or run docs/prompts/audit-lean-generator.md.
+- Python builds a typed AST; Lean 4.34.1 checks proofs (no Mathlib).
+- The default generate() CLI still produces concrete Nat.
+- Present: generate, generate_general, registry, complexity, definitions,
   assess_hypothesis, explore, verify_source.
-- Istniejące testy (unittest, 134) muszą pozostać zielone.
-- Preferuj typed AST + istniejący exporter zamiast dowolnego tekstu Lean od modelu.
-- TDD, małe fazy, dokumentacja odzwierciedlająca faktyczny kod.
-- Nie pytaj użytkownika; przy wątpliwościach wybierz rekomendowaną opcję z tego promptu.
-- Prowadź handoff w .cursor/work/continuous-lean-ai.md.
+- Existing tests (unittest, 134) must stay green.
+- Prefer a typed AST + the existing exporter over arbitrary Lean text from a model.
+- TDD, small phases, documentation that matches the code that exists.
+- Do not ask the user; when in doubt pick the recommended option in this prompt.
+- Keep the handoff in .cursor/work/continuous-lean-ai.md.
 
-## Krytyka pomysłu „3 osobowości = brak halucynacji” (obowiązkowa)
+## Critique of "3 personas = no hallucinations" (required)
 
-Trzy role, które się zgadzają, NIE eliminują halucynacji.
-Mogą współdzielić wagi, biasy, prompt lub skopiować sobie nawzajem błąd.
-Zgoda ról jest sygnałem priorytetu / jakości roboczej, NIGDY statusem formalnym.
-Tylko Lean może nadać proved lub refuted.
-Analogia „lustro / nagranie siebie” jest dobra jako niezależna krytyka artefaktów,
-ale nie jako walidacja matematyczna.
+Three roles that agree do NOT eliminate hallucinations.
+They can share weights, biases, a prompt, or copy one another's mistake.
+Role agreement is a priority / working-quality signal, NEVER a formal status.
+Only Lean may assign proved or refuted.
+The analogy "a mirror / a recording of oneself" is good as an independent critique of artifacts,
+but not as mathematical validation.
 
-## Kanoniczne statusy (SQLite + API)
+## Canonical statuses (SQLite + API)
 
-Każdy kandydat kończy w dokładnie jednym statusie wyprowadzonym z dowodów:
+Every candidate ends in exactly one status derived from evidence:
 
-1. proved — Lean zaakceptował kompletny dowód (bez sorry).
-2. refuted — Lean zaakceptował dowód, że skonkretyzowane zdanie jest fałszywe
-   (certyfikat kontrprzykładu), nie sama heurystyka Pythona.
-3. unresolved — brak przyjętego dowodu i brak certyfikowanego kontrprzykładu;
-   obejmuje timeout, porażkę przeszukiwania, brak świadka w boundzie, zgodę ról bez Leana.
-4. ill_formed — błąd AST/typów albo Lean syntax/typing.
-   Mapowanie z istniejącego assess_hypothesis:
+1. proved — Lean accepted a complete proof (no sorry).
+2. refuted — Lean accepted a proof that the instantiated sentence is false
+   (a counterexample certificate), not a Python heuristic by itself.
+3. unresolved — no accepted proof and no certified counterexample;
+   includes timeout, a failed search, no witness inside the bound, role agreement without Lean.
+4. ill_formed — an AST/type error or Lean syntax/typing.
+   Mapping from the existing assess_hypothesis:
    invalid_syntax | invalid_type → ill_formed;
-   proved | refuted | unresolved bez zmiany znaczenia.
-   SQLite/API continuous-AI NIE wprowadza równoległych synonimów statusów.
+   proved | refuted | unresolved keep their meaning.
+   The continuous-AI SQLite/API does NOT introduce parallel synonyms for statuses.
 
-Zasady:
-- Brak dowodu ≠ fałsz.
-- Błąd kompilacji ≠ kontrprzykład.
-- Model/role NIGDY nie zapisują bezpośrednio proved/refuted.
-- Python find_counterexample może zaproponować świadka; refuted dopiero po Lean certificate.
-- Odrzucaj: sorry, axiom, opaque, unsafe, #eval, run_io, run_cmd, niezatwierdzone importy.
+Rules:
+- Lack of a proof ≠ falsehood.
+- A compile error ≠ a counterexample.
+- The model/roles NEVER write proved/refuted directly.
+- Python find_counterexample may propose a witness; refuted only after a Lean certificate.
+- Reject: sorry, axiom, opaque, unsafe, #eval, run_io, run_cmd, unapproved imports.
 
-## Faza 0 — architektura przed kodem
+## Phase 0 — architecture before code
 
-Zanim napiszesz implementację, zapisz:
+Before you write an implementation, record:
 - docs/continuous-ai-architecture.md
-- draft DDL / migracji w docs (projekt schematu); pliki migracji + zastosowanie = Faza 1 pod TDD
-- diagram pętli: propose → prove/critique → validate → classify → store → schedule
-- plan curriculum i bramek promocji
-- plan pamięci na Mac 24 GB RAM
+- a draft DDL / migrations in docs (schema design); migration files + applying them = Phase 1 under TDD
+- a loop diagram: propose → prove/critique → validate → classify → store → schedule
+- a curriculum and promotion-gate plan
+- a memory plan for a Mac with 24 GB RAM
 
-Dopiero potem TDD i kod.
+Only then TDD and code.
 
-## Faza 1 — SQLite od razu (minimalny schemat, nie archiwum)
+## Phase 1 — SQLite immediately (a minimal schema, not an archive)
 
-Użyj SQLite z WAL, foreign keys, busy_timeout, transakcjami, migracjami,
-idempotency keys i crash-safe commitami.
+Use SQLite with WAL, foreign keys, busy_timeout, transactions, migrations,
+idempotency keys, and crash-safe commits.
 
-Tabele (minimum):
+Tables (minimum):
 - schema_migrations
 - runs — status, seed, config JSON, curriculum_level, model_version, created/updated
 - candidates — stable_id, canonical AST JSON, structural_hash, kind
@@ -96,21 +96,21 @@ Tabele (minimum):
 - checkpoints — run_id, seq, event_cursor, scheduler_state, rng_state,
   curriculum_state, artifact hashes
 
-Outcome kandydata jest DERIVED z accepted validations, nie z opinii modelu.
+A candidate's outcome is DERIVED from accepted validations, not from the model's opinion.
 
-## Faza 2 — pause / resume / checkpoint
+## Phase 2 — pause / resume / checkpoint
 
-- Checkpoint co 300 s domyślnie; konfigurowalne tylko w zakresie 300–600 s.
-- Checkpoint także: pause, SIGINT/SIGTERM, promocja curriculum, promocja modelu.
-- Pause: zatrzymaj nowe dequeue, dokończ lub release lease’ów, commit, atomic publish checkpoint, exit.
+- Checkpoint every 300 s by default; configurable only in the range 300–600 s.
+- Also checkpoint on: pause, SIGINT/SIGTERM, curriculum promotion, model promotion.
+- Pause: stop new dequeues, finish or release leases, commit, atomically publish the checkpoint, exit.
 - Resume: integrity check, restore RNG/scheduler, reclaim expired leases, zero duplicate attempts.
-- Snapshot musi pozwalać na replay runu z zapisanych raw_response bez ponownego wołania modelu.
-- Zachowuj latest known-good checkpoint.
+- The snapshot must allow replay of a run from recorded raw_response without calling the model again.
+- Keep the latest known-good checkpoint.
 
-Trackery: run status, curriculum level, event cursor, queue depths, model version.
+Trackers: run status, curriculum level, event cursor, queue depths, model version.
 CLI minimum: start | pause | resume | status | replay.
 
-## Faza 3 — kolejki i workers (żeby model nie czekał bezczynnie)
+## Phase 3 — queues and workers (so the model is not idle)
 
 Bounded queues:
 - propose
@@ -119,98 +119,98 @@ Bounded queues:
 - counterexample_search
 - lean_validate
 
-Wymagania:
-- backpressure przy high-water mark
-- priorytet jobów odblokowujących downstream
+Requirements:
+- backpressure at a high-water mark
+- priority for jobs that unblock downstream work
 - leases + heartbeats
-- JEDEN załadowany serwer modelu; role multiplexowane requestami (nie 3 pełne kopie w RAM)
-- start: 1 inference worker + 1–2 Lean workers; skaluj po pomiarze
-- mierz utilization i latency, ale nie poświęcaj poprawności dla zajętości
+- ONE loaded model server; roles multiplexed by request (not 3 full copies in RAM)
+- start: 1 inference worker + 1–2 Lean workers; scale after measurement
+- measure utilization and latency, but do not trade correctness for busyness
 
-## Faza 4 — curriculum: trudność rośnie bardzo wolno
+## Phase 4 — curriculum: difficulty grows very slowly
 
-Zacznij od istniejącego generatora konkretnego Nat (etap 1).
-Rozszerzaj możliwości etapów 2→6 po JEDNYM poziomie naraz.
-Nie pomijaj etapów.
+Start from the existing concrete Nat generator (stage 1).
+Extend the capabilities of stages 2→6 ONE level at a time.
+Do not skip stages.
 
-Bramka promocji poziomu (wszystkie warunki):
-- ≥ 1000 nowo ocenionych przez Lean kandydatów na poziomie
-- 3 kolejne okna ewaluacji spełniają progi
-- zero naruszeń poprawności (false proved/refuted)
-- stabilna różnorodność (structural novelty, diversity metrics)
-- brak regresji na held-out benchmarku
-- co najwyżej jedna promocja na ukończone okno checkpointowe
+Level promotion gate (all conditions):
+- ≥ 1000 candidates newly evaluated by Lean at the level
+- 3 successive evaluation windows meet the thresholds
+- zero correctness violations (false proved/refuted)
+- stable diversity (structural novelty, diversity metrics)
+- no regression on the held-out benchmark
+- at most one promotion per finished checkpoint window
 
-Complexity: używaj istniejących miar (ast_size, depth, variables, operators,
-dependencies, definitions). Wielkość liczebnika NIE jest trudnością.
+Complexity: use the existing measures (ast_size, depth, variables, operators,
+dependencies, definitions). The size of a numeral is NOT difficulty.
 
-Po zaliczeniu bramki etapu 6 generatora wprowadź trzy izolowane role
-jako helper etapu 7 (hipotezy), nie wcześniej:
+After the stage 6 generator gate, introduce three isolated roles
+as a stage 7 helper (hypotheses), not earlier:
 
 1. theorem_proposer
-   - emituje typowany kandydat (AST kontrakt) + krótkie rationale
-   - NIE nadaje werdyktu
-   - tryb „bez kontekstu”: brak historii innych agentów; tylko kontrakt AST,
-     seed/losowość, opcjonalnie mały retrieval z SQLite po structural_hash / family
-     (retrieval ≠ shared chat scratchpad)
+   - emits a typed candidate (AST contract) + a short rationale
+   - does NOT assign a verdict
+   - "no context" mode: no history of other agents; only the AST contract,
+     seed/randomness, optionally a small retrieval from SQLite by structural_hash / family
+     (retrieval ≠ a shared chat scratchpad)
 
 2. prover
-   - niezależna próba dowodu; nie widzi roboczych notatek proposera poza kandydatem
+   - an independent proof attempt; does not see the proposer's working notes beyond the candidate
 
 3. alternate_prover_critic
-   - najpierw niezależna próba dowodu BEZ widoku primary proof
-   - potem krytyka obu artefaktów (różnice, luki, alternatywa)
+   - first an independent proof attempt WITHOUT a view of the primary proof
+   - then a critique of both artifacts (differences, gaps, an alternative)
 
-Role wymieniają tylko immutable artifacts przez SQLite.
-Zapisujemy „robocze rozwiązanie” do dalszego treningu / retrieval TYLKO gdy:
-- Lean zaakceptował proof LUB certyfikowany counterexample, ORAZ
-- (opcjonalnie) obie ścieżki proverów nie są sprzeczne względem tego samego artefaktu.
-Zgoda ról bez Leana NIGDY nie wystarcza.
+Roles exchange only immutable artifacts through SQLite.
+A "working solution" is stored for later training / retrieval ONLY when:
+- Lean accepted a proof OR a certified counterexample, AND
+- (optionally) the two prover paths are not contradictory about the same artifact.
+Role agreement without Lean is NEVER enough.
 
-Nieudana bramka zamraża advancement; nie przepisuje accepted evidence.
+A failed gate freezes advancement; it does not rewrite accepted evidence.
 
-## Faza 5 — strategia modelu na Mac 24 GB RAM
+## Phase 5 — model strategy on a Mac with 24 GB RAM
 
-Rekomendacja domyślna:
-- jeden lokalny model 7B–8B instruct/code, kwantyzacja 4-bit (MLX lub llama.cpp)
+Default recommendation:
+- one local 7B–8B instruct/code model, 4-bit quantization (MLX or llama.cpp)
 - context 8K–16K
-- peak process memory < ~18 GB (zostaw headroom dla Lean i macOS)
-- NIE trzymaj trzech resident copies modelu
-- 14B 4-bit tylko jako opcjonalny benchmark po pomiarze latency/RAM
+- peak process memory < ~18 GB (leave headroom for Lean and macOS)
+- do NOT keep three resident copies of the model
+- 14B 4-bit only as an optional benchmark after measuring latency/RAM
 
-Najpierw ucz system przez:
-- data flywheel (SQLite memory)
-- retrieval wcześniejszych proved/refuted
-- ranking szablonów / taktyk / reguł generatora
-- contextual bandit / policy scheduling
+First teach the system through:
+- a data flywheel (SQLite memory)
+- retrieval of earlier proved/refuted
+- ranking of templates / tactics / generator rules
+- a contextual bandit / policy scheduling
 
-LoRA / fine-tune DOPIERO później, offline między runami:
-- trenuj WYŁĄCZNIE na Lean-validated proved/refuted
-- NIGDY na unresolved, ill_formed, samej zgodzie ról, niecertyfikowanych świadkach
-- challenger vs champion na held-out; rollback przy regresji
-- każda wersja: hash, eval scores, możliwość retire
+LoRA / fine-tune ONLY later, offline between runs:
+- train ONLY on Lean-validated proved/refuted
+- NEVER on unresolved, ill_formed, role agreement alone, or uncertified witnesses
+- challenger vs champion on held-out; rollback on regression
+- every version: hash, eval scores, the ability to retire
 
-## Faza 6 — ochrona przed self-training collapse
+## Phase 6 — protection against self-training collapse
 
-- Immutable seed corpus + held-out benchmark (nigdy w train).
-- Deduplikacja po structural_hash między train/eval.
+- An immutable seed corpus + a held-out benchmark (never in train).
+- Dedup by structural_hash between train and eval.
 - Balance family / outcome / difficulty.
-- Cap potomków syntezowanych z jednego ancestora.
-- Wykrywaj triviality gaming: novelty, AST complexity, dependency depth, proof diversity.
-- Quarantine jeśli ten sam kandydat wygląda na proved i refuted jednocześnie → system defect.
-- Promocja modelu/policy tylko gdy poprawia correctness, solve rate, calibration, diversity, resource use.
+- Cap descendants synthesized from one ancestor.
+- Detect triviality gaming: novelty, AST complexity, dependency depth, proof diversity.
+- Quarantine if the same candidate looks proved and refuted at once → a system defect.
+- Promote a model/policy only when it improves correctness, solve rate, calibration, diversity, resource use.
 
-## Faza 7 — Lean validation
+## Phase 7 — Lean validation
 
-- Pin i zapisuj toolchain (lean/lean-toolchain, hash).
-- Waliduj kandydatów osobno (jeden zły plik nie psuje batcha).
-- Kontrprzykład = Lean akceptuje twierdzenie o negacji instantiated proposition.
-- Limits: wall-clock, CPU, process group kill, output truncate, controlled imports, temp files.
-- reuse theorem_gen.verify gdzie możliwe; nie buduj drugiego ad-hoc runnera bez potrzeby.
+- Pin and store the toolchain (lean/lean-toolchain, hash).
+- Validate candidates separately (one bad file does not spoil the batch).
+- A counterexample = Lean accepts a theorem of the negation of the instantiated proposition.
+- Limits: wall-clock, CPU, process-group kill, output truncate, controlled imports, temp files.
+- reuse theorem_gen.verify where possible; do not build a second ad-hoc runner without a need.
 
-## Faza 8 — CLI i DX
+## Phase 8 — CLI and DX
 
-Polecenia (repo root):
+Commands (repo root):
 
     python3 -m theorem_gen.learn start --run-id ... --curriculum ...
     python3 -m theorem_gen.learn pause --run-id ...
@@ -218,74 +218,74 @@ Polecenia (repo root):
     python3 -m theorem_gen.learn status --run-id ...
     python3 -m theorem_gen.learn replay --run-id ... --from-checkpoint ...
 
-Istniejący `python3 -m theorem_gen generate` musi dalej działać bez regresji.
+The existing `python3 -m theorem_gen generate` must keep working with no regression.
 
-## Acceptance tests (musi przejść lub mieć mierzalny protokół)
+## Acceptance tests (must pass, or have a measurable protocol)
 
-1. Istniejący suite unittest pozostaje zielony.
-2. Migracje, FK, transakcje, idempotency.
-3. Trzy zgadzające się role NIE mogą oznaczyć Lean-rejected jako proved.
-4. Świadek z Pythona bez Lean certificate → unresolved.
-5. Lean-certified witness → refuted z reproducible evidence.
+1. The existing unittest suite stays green.
+2. Migrations, FK, transactions, idempotency.
+3. Three agreeing roles CANNOT mark a Lean-rejected file as proved.
+4. A Python witness with no Lean certificate → unresolved.
+5. A Lean-certified witness → refuted with reproducible evidence.
 6. syntax/typing → ill_formed; timeout → unresolved.
-7. Kill w ≥3 zdefiniowanych punktach (między dequeue→lease, po Lean validate
-   przed commit, podczas checkpoint write) + resume → zero lost/duplicate attempts
-   (sprawdzane przez idempotency_key).
-8. Pause → valid checkpoint; resume odtwarza scheduler/RNG.
-9. Expired leases reclaim; backpressure ogranicza kolejki.
-10. Pod synthetic load z eligible work: utilization inference/Lean powyżej progu
-    (np. ≥80% busy gdy kolejka > 0) — nie „zero idle forever”.
-11. Curriculum nie awansuje wcześnie ani z samych training metrics.
-12. Challenger fail → rollback champion.
-13. Replay z recorded outputs bez inference odtwarza outcomes.
-14. Peak RSS procesu inference+workers+Lean w budżecie (~18 GB headroom na Mac 24 GB),
-    zmierzony skryptem/raportem w docs.
-15. Forbidden Lean constructs rejected mimo zgody ról.
-16. Raport fazy z faktycznie uruchomionymi komendami i wynikami.
+7. Kill at ≥3 defined points (between dequeue→lease, after Lean validate
+   before commit, during the checkpoint write) + resume → zero lost/duplicate attempts
+   (checked by idempotency_key).
+8. Pause → a valid checkpoint; resume restores the scheduler/RNG.
+9. Expired leases are reclaimed; backpressure bounds the queues.
+10. Under a synthetic load with eligible work: inference/Lean utilization above a threshold
+    (for example ≥80% busy when the queue > 0) — not "zero idle forever".
+11. Curriculum does not advance early or from training metrics alone.
+12. A failed challenger → rollback of the champion.
+13. Replay from recorded outputs with no inference reproduces the outcomes.
+14. Peak RSS of the inference process + workers + Lean inside the budget (~18 GB headroom on a 24 GB Mac),
+    measured by a script/report in docs.
+15. Forbidden Lean constructs rejected despite role agreement.
+16. A phase report of commands actually run and their results.
 
-## Kolejność dostarczania
+## Delivery order
 
-1. Architektura + schema draft + handoff
+1. Architecture + schema draft + handoff
 2. SQLite store + migrations + tests
 3. Queue + pause/resume/checkpoint + tests
 4. Lean validation adapter + classify + tests
-5. Curriculum level 1 wired to existing generate()
+5. Curriculum level 1 wired to the existing generate()
 6. Slow gates through stage 6 capabilities
-7. Three roles helper for stage 7
+7. Three roles as a helper for stage 7
 8. Retrieval / ranking / optional offline LoRA later
 9. Docs: architecture, stage notes, measured commands
 
-## Definicja „learning”
+## Definition of "learning"
 
-Wolno napisać, że system się uczy, TYLKO gdy istnieje persisted, evaluated
-policy lub model_version, która bije fixed baseline na held-out.
-Sam zapis coraz większej liczby rekordów w SQLite to pamięć eksperymentów, nie jeszcze „nauka modelu”.
+You may write that the system is learning ONLY when there is a persisted, evaluated
+policy or model_version that beats a fixed baseline on held-out.
+Storing a growing number of records in SQLite is experiment memory, not yet "the model learning".
 
-## Out of scope na start
+## Out of scope at the start
 
 - Mathlib
-- trzy pełne modele w RAM jednocześnie
-- online fine-tune podczas serving
-- obietnica rozwiązania dowolnej hipotezy
-- przepisywanie generatora etapów 0–8 „po cichu”
+- three full models in RAM at once
+- online fine-tune during serving
+- a promise to solve an arbitrary hypothesis
+- quietly rewriting the stage 0–8 generator
 
-Zaczynaj od architektury i czerwonych testów SQLite/pause. Nie kończ fazy bez zielonych testów i raportu komend.
+Start from the architecture and red SQLite/pause tests. Do not finish a phase without green tests and a command report.
 ````
 
-## Jak używać
+## How to use
 
-1. Najpierw (opcjonalnie) uruchom prompt audytu z `docs/prompts/audit-lean-generator.md`, żeby mieć bazę.
-2. Wklej cały blok `text` powyżej do nowego czatu z dostępem do repozytorium i narzędzi.
-3. Trzymaj handoff w `.cursor/work/continuous-lean-ai.md`.
-4. Curriculum i LoRA wdrażaj dopiero po zielonych bramkach — nie skacz do „trzech osobowości” przed etapem 6.
+1. First (optionally) run the audit prompt from `docs/prompts/audit-lean-generator.md`, so the base is known.
+2. Paste the whole `text` block above into a new chat with access to the repository and tools.
+3. Keep the handoff in `.cursor/work/continuous-lean-ai.md`.
+4. Ship curriculum and LoRA only after the gates are green — do not jump to "three personas" before stage 6.
 
-## Rekomendowane decyzje domyślne (gdy agent ma wątpliwości)
+## Recommended defaults (when an agent is unsure)
 
-| Pytanie | Wybór |
-|---------|--------|
-| Ile modeli w RAM? | 1 × 7–8B 4-bit |
+| Question | Choice |
+|----------|--------|
+| How many models in RAM? | 1 × 7–8B 4-bit |
 | Checkpoint interval | 300 s |
-| Kiedy 3 role? | Po bramce curriculum odpowiadającej etapowi 6 |
-| Kiedy LoRA? | Offline, po korpusie Lean-validated i held-out |
-| Co jest prawdą? | Tylko Lean certificate |
-| Proposer „bez kontekstu”? | Brak shared chat; wolno mały retrieval z SQLite |
+| When do the 3 roles start? | After the curriculum gate that corresponds to stage 6 |
+| When LoRA? | Offline, after a Lean-validated corpus and held-out |
+| What counts as truth? | Only a Lean certificate |
+| Proposer "with no context"? | No shared chat; a small SQLite retrieval is allowed |

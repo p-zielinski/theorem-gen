@@ -28,7 +28,15 @@ class JobQueue:
         self.high_water = high_water
         self.lease_ttl_s = float(lease_ttl_s)
 
-    def enqueue(self, run_id: str, job_type: str, *, payload: dict, idempotency_key: str) -> dict:
+    def enqueue(
+        self,
+        run_id: str,
+        job_type: str,
+        *,
+        payload: dict,
+        idempotency_key: str,
+        origin: str = None,
+    ) -> dict:
         if job_type not in PRIORITY:
             raise LearnError(f"unknown job type: {job_type}")
         existing = self.store._one(
@@ -37,7 +45,12 @@ class JobQueue:
         )
         if existing is not None:
             return existing
-        depth = self.occupancy(run_id, job_type)
+        body = dict(payload)
+        lane = None
+        if job_type == "lean_validate":
+            lane = origin or body.get("origin") or "generator"
+            body["origin"] = lane
+        depth = self.occupancy(run_id, job_type, origin=lane)
         if depth >= self.high_water:
             raise Backpressure(job_type)
         now = self.store.now()
@@ -55,7 +68,7 @@ class JobQueue:
                     run_id,
                     job_type,
                     PRIORITY[job_type],
-                    json.dumps(payload, sort_keys=True),
+                    json.dumps(body, sort_keys=True),
                     idempotency_key,
                     now,
                     now,
@@ -66,13 +79,20 @@ class JobQueue:
             (idempotency_key,),
         )
 
-    def occupancy(self, run_id: str, job_type: str) -> int:
+    def occupancy(self, run_id: str, job_type: str, origin: str = None) -> int:
+        """Unfinished jobs of one type. Lean checks are counted per origin lane."""
+        clause = ""
+        params = [run_id, job_type]
+        if origin == "model":
+            clause = " AND instr(payload_json, '\"origin\": \"model\"') > 0"
+        elif origin == "generator":
+            clause = " AND instr(payload_json, '\"origin\": \"model\"') = 0"
         return self.store.count_where(
-            """
+            f"""
             SELECT COUNT(*) FROM queue_jobs
-            WHERE run_id=? AND job_type=? AND state IN ('queued', 'leased')
+            WHERE run_id=? AND job_type=? AND state IN ('queued', 'leased'){clause}
             """,
-            (run_id, job_type),
+            tuple(params),
         )
 
     def depth(self, run_id: str, kinds=None) -> int:

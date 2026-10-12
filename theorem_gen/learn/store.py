@@ -70,7 +70,11 @@ class Store:
         for version, name, filename in MIGRATIONS:
             if version in applied:
                 continue
-            self.conn.executescript(migration_sql(filename))
+            try:
+                self.conn.executescript(migration_sql(filename))
+            except sqlite3.OperationalError as exc:
+                if "duplicate column name" not in str(exc).lower():
+                    raise
             self._apply_pragmas()
             self.conn.execute(
                 "INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)",
@@ -188,6 +192,13 @@ class Store:
     def get_by_stable(self, stable_id: str):
         return self._one("SELECT * FROM candidates WHERE stable_id=?", (stable_id,))
 
+    def structural_hashes(self, run_id: str) -> set:
+        rows = self.conn.execute(
+            "SELECT structural_hash FROM candidates WHERE run_id=?",
+            (run_id,),
+        )
+        return {row[0] for row in rows}
+
     def list_candidates(self, run_id: str) -> list:
         return self._all(
             "SELECT * FROM candidates WHERE run_id=? ORDER BY id",
@@ -263,8 +274,8 @@ class Store:
                 INSERT INTO validations (
                   candidate_id, attempt_id, lean_version, toolchain_hash, validation_type,
                   result, accepted, stdout, stderr, message, failure_class,
-                  idempotency_key, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  idempotency_key, created_at, lean_ms
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(idempotency_key) DO NOTHING
                 """,
                 (
@@ -281,6 +292,7 @@ class Store:
                     fields.get("failure_class"),
                     fields["idempotency_key"],
                     self.now(),
+                    fields.get("lean_ms"),
                 ),
             )
             if cursor.rowcount == 1:

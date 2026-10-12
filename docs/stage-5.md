@@ -1,11 +1,11 @@
-# Etap 5 — złożoność
+# Stage 5 — complexity
 
-> Data ukończenia: 2026-10-11
-> Status: ukończony
+> Completed: 2026-10-11
+> Status: done
 
-## 1. Zaimplementowany zakres
+## 1. What was implemented
 
-`measure_expr` i `measure_theorem` liczą:
+`measure_expr` and `measure_theorem` count:
 
 - `ast_size`
 - `depth`
@@ -14,37 +14,37 @@
 - `dependencies`
 - `definitions`
 
-`NatLit(1)` i `NatLit(10**12)` mają ten sam rozmiar i tę samą głębokość. Wielkość liczebnika nie jest miarą. Zdanie z kwantyfikatorem jest większe niż sam duży liczebnik.
+`NatLit(1)` and `NatLit(10**12)` have the same size and the same depth. The size of a numeral is not a measure. A sentence with a quantifier is larger than a big numeral by itself.
 
-`GeneratorConfig.complexity_bounds` filtruje kandydatów `generate` i `generate_general`. Para `(low, high)` z `low > high` jest odrzucana przy tworzeniu konfiguracji. Granica, której żaden kandydat nie spełnia, kończy się `GenerationError` i tekstem, że to limit generowania, a nie werdykt matematyczny.
+`GeneratorConfig.complexity_bounds` filters candidates of `generate` and `generate_general`. A pair `(low, high)` with `low > high` is rejected when the configuration is created. A bound that no candidate meets ends in `GenerationError` and text that this is a generation limit, not a mathematical verdict.
 
-Generator trafia w każdą z sześciu miar:
+The generator hits each of the six measures:
 
-- `ast_size` 5–5 i `variables` 0–0 dla `add_zero` zostawia `((8 + 0) = 8)`
-- `depth` 2–2 i `operators` 1–1 też zostawia to zdanie; `operators` 0–0 wybiera `(8 <= 8)`
-- `variables` 1–1 wybiera `add_zero_all`, a 2–2 wybiera `add_comm_all`
-- `dependencies` 1–1 i `definitions` 1–1 przy regule `use_definition` wybiera twierdzenie o `double`; cytowanie ma `discovered=False`
+- `ast_size` 5–5 and `variables` 0–0 for `add_zero` leaves `((8 + 0) = 8)`
+- `depth` 2–2 and `operators` 1–1 also leave that sentence; `operators` 0–0 chooses `(8 <= 8)`
+- `variables` 1–1 chooses `add_zero_all`, and 2–2 chooses `add_comm_all`
+- `dependencies` 1–1 and `definitions` 1–1 with the rule `use_definition` choose the theorem about `double`; the citation has `discovered=False`
 
-Gdy wszystkie kandydaty `add_zero` mieszczą się w `ast_size` 5–5 i `variables` 0–0, ziarno 1 nadal daje `((8 + 0) = 8)` i `((7 + 0) = 7)`. Nagłówek konkretny pozostaje przy banerze etapu 1 i dopisuje linię `complexity`.
+When every `add_zero` candidate fits `ast_size` 5–5 and `variables` 0–0, seed 1 still gives `((8 + 0) = 8)` and `((7 + 0) = 7)`. The concrete header stays with the stage 1 banner and adds a `complexity` line.
 
-Liczba definicji bez rejestru liczy węzły `Const`. Z rejestrem liczy zależności, których rekord ma rodzaj `definition`.
+The definition count with no registry counts `Const` nodes. With a registry it counts dependencies whose record has kind `definition`.
 
-## 2. Testy
+## 2. Tests
 
-`tests/test_stage5.py`: wielkość liczebnika, trafienie w granice, niemożliwa granica, granica zmiennych, odwrócona para, zależność definicyjna.
+`tests/test_stage5.py`: numeral size, hitting bounds, an impossible bound, a variable bound, a reversed pair, a definition dependency.
 
-## 3. Polecenia i wyniki
+## 3. Commands and results
 
-Wspólny przebieg jest w [stage-8.md](stage-8.md).
+The shared run is in [stage-8.md](stage-8.md).
 
-## 4. Ograniczenia
+## 4. Limits
 
-Filtr granic działa w `generate` i `generate_general`. `explore` ma stałe cztery szablony i nie czyta tych granic. Miary są strukturalne: nie oceniają trudności dowodu w Leanie. Reguła `use_definition` nie wchodzi do domyślnego zestawu etapu 1.
+The bound filter works in `generate` and `generate_general`. `explore` has four fixed templates and does not read these bounds. The measures are structural: they do not grade how hard a proof is in Lean. The rule `use_definition` is not in the default stage 1 set.
 
-## 5. Ocena kryteriów
+## 5. Criteria
 
-Kryterium etapu 5 jest spełnione: generowanie umie utrzymać się w zadanym zakresie kilku miar, a duża liczba nie jest automatycznie trudniejsza.
+The stage 5 criterion is met: generation can stay inside a requested range of several measures, and a large number is not automatically harder.
 
-## 6. Następny krok
+## 6. Next step
 
-Etap 6 dodaje definicję i twierdzenie, które z niej korzysta.
+Stage 6 adds a definition and a theorem that uses it.

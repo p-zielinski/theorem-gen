@@ -1,4 +1,4 @@
-# Ewolucyjny generator twierdzeń Lean 4
+# Evolutionary Lean 4 theorem generator
 
 > Last updated: 2026-10-11
 > Branch: `main`
@@ -6,61 +6,61 @@
 
 ## Problem & goal
 
-Generator tworzy twierdzenia jako struktury, eksportuje je do wąskiego podzbioru Lean 4 i oddaje dowód do sprawdzenia kompilatorowi. „Done” dla serii 0–8: konkretna arytmetyka, zdania ogólne, szersze AST, rejestr, złożoność, definicje, hipotezy i eksploracja, która umie zostawić zdanie nierozstrzygnięte. Lean sprawdza to, co ma dowód. Brak dowodu nie jest fałszem.
+The generator builds theorems as structures, exports them to a narrow subset of Lean 4, and hands the proof to the compiler. "Done" for the series 0–8: concrete arithmetic, general sentences, a wider AST, a registry, complexity, definitions, hypotheses, and an exploration that can leave a sentence unresolved. Lean checks what has a proof. Lack of a proof is not falsehood.
 
 ## Scope
 
-- **In scope:** etapy 0–8 według `docs/stages.md`.
-- **Out of scope:** Mathlib, pełny parser Leana, trwały rejestr na dysku, nowe zależności Pythona.
+- **In scope:** stages 0–8 according to `docs/stages.md`.
+- **Out of scope:** Mathlib, a full Lean parser, a durable registry on disk, new Python dependencies.
 
 ## Key files & context
 
 | Area | Path | Role |
 |------|------|------|
-| Raporty | `docs/stage-0.md` … `docs/stage-8.md` | Zakres, testy, polecenia, ograniczenia |
-| Architektura | `docs/architecture.md` | Moduły i kontrakt weryfikacji |
-| Kryteria | `docs/stages.md` | Definicja ukończenia |
-| Pakiet | `theorem_gen/` | Generacja, eksport, rejestr, hipotezy, eksploracja |
-| Testy | `tests/test_stage2.py` … `tests/test_stage8.py`, `tests/test_lean_integration.py` | unittest i prawdziwy Lean |
-| Projekt Lean | `lean/` | Lake, bez Mathlib; złoty plik etapu 1 |
-| Toolchain | `.toolchains/elan/` | Lokalny Lean 4.34.1, poza gitem |
+| Reports | `docs/stage-0.md` … `docs/stage-8.md` | Scope, tests, commands, limits |
+| Architecture | `docs/architecture.md` | Modules and the verification contract |
+| Criteria | `docs/stages.md` | Definition of done |
+| Package | `theorem_gen/` | Generation, export, registry, hypotheses, exploration |
+| Tests | `tests/test_stage2.py` … `tests/test_stage8.py`, `tests/test_lean_integration.py` | unittest and real Lean |
+| Lean project | `lean/` | Lake, no Mathlib; the stage 1 golden file |
+| Toolchain | `.toolchains/elan/` | Local Lean 4.34.1, outside git |
 
 ## Decisions
 
-- 2026-10-11: Python generuje i eksportuje, Lean wyłącznie sprawdza. Bez parsera Leana i bez Mathlib.
-- 2026-10-11: Elan jest lokalny (`.toolchains/elan`, `--no-modify-path`). Wersja przypięta: Lean 4.34.1, Lake 5.0.0.
-- 2026-10-11: LCG zamiast `random.Random`, żeby ziarno nie zależało od wersji Pythona.
-- 2026-10-11: `sorry` przy kodzie wyjścia 0 nie jest dowodem. `RLIMIT_AS` pominięty, bo CPython 3.9 na tym macOS nie umie go ustawić; zostają timeout i `RLIMIT_CPU`.
-- 2026-10-11: Testy na `unittest` ze standardowej biblioteki, bez nowych zależności Pythona.
-- 2026-10-11: Ścieżki pliku i projektu są rozwiązywane przed zmianą `cwd` Lake.
-- 2026-10-11: `rules=None` znaczy co innego w `generate` (reguły konkretne) i w `generate_general` (reguły ogólne). Eksport ogólny używa `config_for_export`.
-- 2026-10-11: `pred` jest odrzucony, bo obcięty poprzednik na `Nat` zmienia znaczenie zera.
-- 2026-10-11: Cytowanie i użycie definicji mają `discovered=False`.
-- 2026-10-11: Eksploracja ma cztery szablony. `no_proof`, `refuted` i `unprovable_in_fragment` są rozłączne. Status `proved` w eksploracji oznacza cytowanie lematu; plik Lean i tak jest sprawdzany osobno.
-- 2026-10-11: Komunikat Leana `decide` „proved that the proposition … is false” jest klasą `proof`.
-- 2026-10-11: Granice złożoności obejmują wszystkie sześć miar. `variables` wybiera zdanie ogólne, a `dependencies` i `definitions` wymagają jawnej reguły `use_definition`, spoza domyślnego zestawu.
-- 2026-10-11: Po audycie: poprawiono komunikat nieznanego `kind` w eksporcie; wspólny filtr `candidate_within_bounds`; README/architecture wyjaśniają trzy znaczenia `proved`.
+- 2026-10-11: Python generates and exports, Lean only checks. No Lean parser and no Mathlib.
+- 2026-10-11: Elan is local (`.toolchains/elan`, `--no-modify-path`). Pinned version: Lean 4.34.1, Lake 5.0.0.
+- 2026-10-11: An LCG instead of `random.Random`, so the seed does not depend on the Python version.
+- 2026-10-11: `sorry` at exit code 0 is not a proof. `RLIMIT_AS` is skipped, because CPython 3.9 on this macOS cannot set it; the timeout and `RLIMIT_CPU` remain.
+- 2026-10-11: Tests use `unittest` from the standard library, with no new Python dependencies.
+- 2026-10-11: File and project paths are resolved before Lake's `cwd` changes.
+- 2026-10-11: `rules=None` means something different in `generate` (concrete rules) and in `generate_general` (general rules). General export uses `config_for_export`.
+- 2026-10-11: `pred` is rejected, because a truncated predecessor on `Nat` changes the meaning of zero.
+- 2026-10-11: A citation and a use of a definition have `discovered=False`.
+- 2026-10-11: Exploration has four templates. `no_proof`, `refuted`, and `unprovable_in_fragment` are disjoint. The status `proved` in exploration means a lemma citation; the Lean file is still checked separately.
+- 2026-10-11: Lean's `decide` message "proved that the proposition … is false" is class `proof`.
+- 2026-10-11: Complexity bounds cover all six measures. `variables` selects a general sentence, and `dependencies` and `definitions` require the explicit rule `use_definition`, outside the default set.
+- 2026-10-11: After the audit: the unknown-`kind` message in the export was fixed; a shared `candidate_within_bounds` filter; README/architecture explain the three meanings of `proved`.
 
 ## Progress
 
-- [x] Etap 0: środowisko, architektura, kryteria
-- [x] Etap 1: konkretne `Nat`, eksport, Lean, raport
-- [x] Etap 2: universal, conditional, expression
-- [x] Etap 3: szersze AST i odrzucenie złych typów
-- [x] Etap 4: rejestr, cykle, replay
-- [x] Etap 5: miary i granice generowania
-- [x] Etap 6: definicja `double` sprawdzona w Leanie
-- [x] Etap 7: hipotezy i metryki różnorodności
-- [x] Etap 8: eksploracja czterech werdyktów
+- [x] Stage 0: environment, architecture, criteria
+- [x] Stage 1: concrete `Nat`, export, Lean, report
+- [x] Stage 2: universal, conditional, expression
+- [x] Stage 3: a wider AST and rejection of bad types
+- [x] Stage 4: registry, cycles, replay
+- [x] Stage 5: measures and generation bounds
+- [x] Stage 6: the `double` definition checked in Lean
+- [x] Stage 7: hypotheses and diversity metrics
+- [x] Stage 8: exploration of four verdicts
 
 ## Next steps
 
-1. Nie zaczynać kolejnego etapu w tej serii. Etapy 0–8 są zamknięte.
-2. Osobna pętla SQLite + Lean jest w `.cursor/work/continuous-lean-ai.md`. Nie przepisuje generatora 0–8.
+1. Do not start another stage in this series. Stages 0–8 are closed.
+2. The separate SQLite + Lean loop is in `.cursor/work/continuous-lean-ai.md`. It does not rewrite the 0–8 generator.
 
 ## Blockers / open questions
 
-- Brak. Lean 4.34.1 jest zainstalowany lokalnie.
+- None. Lean 4.34.1 is installed locally.
 
 ## Verification
 
@@ -72,4 +72,4 @@ python3 -m compileall -q theorem_gen tests
 git diff --check
 ```
 
-Wynik: 134 testy `OK` (po poprawkach poaudytowych). CLI `verification: proved`, golden `Generated.lean` zgodny. Raport zbiorczy: `docs/stage-8.md`.
+Result: 134 tests `OK` (after the post-audit fixes). CLI `verification: proved`, golden `Generated.lean` matches. Combined report: `docs/stage-8.md`.

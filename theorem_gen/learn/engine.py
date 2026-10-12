@@ -4,16 +4,22 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
 
 from theorem_gen.export_lean import export_prop
-from theorem_gen.learn.batches import build_batch, has_capability, source_for
+from theorem_gen.learn.batches import has_capability, novel_batch, review_items, rich_items, source_for
 from theorem_gen.learn.checkpoint import CHECKPOINT_DEFAULT_S, Checkpoints, normalize_interval
 from theorem_gen.learn.curriculum import assess_gate, level_is_justified
 from theorem_gen.learn.errors import Backpressure, CapabilityError, Crash, LearnError
 from theorem_gen.learn.heldout import HELD_OUT_HASHES, evaluate_held_out, scores_from_held_out
 from theorem_gen.learn.policy import CHAMPION_ID, adjudicate, admit_descendant, ensure_baseline, learning_claimed
 from theorem_gen.learn.queue import INFERENCE_JOBS, LEAN_JOBS, JobQueue
+from theorem_gen.learn import minilm
+from theorem_gen.learn.train import enqueue as enqueue_train
+from theorem_gen.learn.train import progress as train_progress
+from theorem_gen.learn.train import remember_workers, snapshot as train_snapshot
 from theorem_gen.learn.roles import alternate_prompt, proposer_prompt, prover_prompt, retrieve
 from theorem_gen.learn.validate import (
     false_proposition,
@@ -122,12 +128,20 @@ class Engine:
         hooks=None,
         until_pause: bool = False,
         refill_when_idle: bool = False,
+        lean_workers: int = 1,
+        lm: bool = False,
+        language=None,
     ) -> None:
         if isinstance(seed, bool) or not isinstance(seed, int):
             raise LearnError("seed must be an int")
         if isinstance(batch_count, bool) or not isinstance(batch_count, int) or batch_count < 0:
             raise LearnError("batch_count must be >= 0")
+        if isinstance(lean_workers, bool) or not isinstance(lean_workers, int) or not 1 <= lean_workers <= 32:
+            raise LearnError("lean_workers must be an int from 1 to 32")
         self.store = store
+        self.lean_workers = lean_workers
+        self.lm_enabled = bool(lm or language is not None)
+        self._language = language
         self.run_id = run_id
         self.seed = seed
         self.batch_count = batch_count
@@ -204,6 +218,7 @@ class Engine:
         }
         self.publish("start")
         self._enqueue_propose()
+        remember_workers(self.store, self.run_id, self.lean_workers)
 
     def run_steps(self, n) -> None:
         if n is not None and (isinstance(n, bool) or not isinstance(n, int) or n < 0):
@@ -216,6 +231,8 @@ class Engine:
                 return
             self._maybe_time_checkpoint()
             did = self.cooperative_step()
+            self._train_slice()
+            self._lm_slice()
             if not did:
                 if self.scheduler.get("hold_propose"):
                     return
@@ -229,6 +246,8 @@ class Engine:
             steps += 1
         if n is not None and n > 0 and not self.pause_requested:
             self._finish_open_batch()
+            self._train_slice()
+            self._lm_slice()
         if ran:
             self.promote_if_ready()
 
@@ -267,6 +286,12 @@ class Engine:
         return did
 
     def _serve(self, kinds, meter_kind: str) -> bool:
+        if (
+            meter_kind == "lean"
+            and self.lean_workers > 1
+            and self.queue.depth(self.run_id, ("lean_validate",)) > 0
+        ):
+            return self._serve_lean_parallel()
         if self.queue.depth(self.run_id, kinds) <= 0:
             return False
         job = self.queue.dequeue(self.run_id, meter_kind, kinds, self.hooks)
@@ -280,12 +305,89 @@ class Engine:
             setattr(self.meter, f"{meter_kind}_idle", getattr(self.meter, f"{meter_kind}_idle") + 1)
         return True
 
+    def _serve_lean_parallel(self) -> bool:
+        """Run several Lean checks at once. SQLite writes stay on this thread."""
+        batch = []
+        while len(batch) < self.lean_workers:
+            if self.queue.depth(self.run_id, ("lean_validate",)) <= 0:
+                break
+            job = self.queue.dequeue(self.run_id, "lean", ("lean_validate",), self.hooks)
+            if job is None or not self.queue.heartbeat(job["id"], job["lease_owner"]):
+                setattr(self.meter, "lean_idle", self.meter.lean_idle + 1)
+                break
+            try:
+                batch.append((job, self._lean_request(job)))
+            except Crash:
+                raise
+            except Exception as exc:
+                self._fail_job(job, exc)
+        if not batch:
+            return False
+        futures = {}
+        with ThreadPoolExecutor(max_workers=len(batch), thread_name_prefix="lean") as pool:
+            for job, request in batch:
+                futures[pool.submit(self._execute_lean, request)] = (job, request)
+            waiting = set(futures)
+            while waiting:
+                done, waiting = wait(waiting, timeout=0.05, return_when=FIRST_COMPLETED)
+                if not done:
+                    self._train_slice()
+                    continue
+                for future in done:
+                    job, request = futures[future]
+                    try:
+                        recorded = future.result()
+                    except Exception as exc:
+                        self._fail_job(job, exc)
+                        self.meter.lean_idle += 1
+                        continue
+                    outcome = self._finish_lean(job, request, recorded)
+                    if outcome == "done":
+                        self.meter.lean_busy += 1
+                    else:
+                        self.meter.lean_idle += 1
+        return True
+
+    def _train_slice(self) -> None:
+        train_progress(self.store, self.run_id, lean_workers=self.lean_workers)
+
+    def _ensure_lm(self) -> None:
+        if self._language is not None:
+            return
+        from theorem_gen.learn.minilm import MiniLMService
+
+        self._language = MiniLMService(self.store.path.parent / "lm" / self.run_id)
+
+    def _lm_slice(self) -> None:
+        if not self.lm_enabled:
+            return
+        try:
+            self._ensure_lm()
+            self._language.tick(self)
+        except Exception as exc:
+            self.lm_enabled = False
+            print(f"lm error: {exc}", flush=True)
+
+    def _stop_lm(self) -> None:
+        if self._language is None:
+            return
+        self._language.stop()
+
+    def _fail_job(self, job: dict, exc: BaseException) -> None:
+        self.queue.fail(job)
+        self.store.append_event(
+            self.run_id,
+            "job_failed",
+            {"job_id": job["id"], "error": str(exc)},
+        )
+
     def pause(self) -> None:
         run = self.store.get_run(self.run_id)
         if run is None:
             raise LearnError("unknown run")
         if run["status"] == "paused":
             return
+        self._stop_lm()
         self.queue.release_all(self.run_id)
         self.publish("pause")
 
@@ -311,6 +413,7 @@ class Engine:
             }
             self.publish("start")
             self._ensure_initial_propose()
+            remember_workers(self.store, self.run_id, self.lean_workers)
             return
         self.checkpoints.verify(row)
         curriculum = json.loads(row["curriculum_state_json"])
@@ -328,6 +431,7 @@ class Engine:
         self._ensure_initial_propose()
         if run["status"] != "running":
             self.store.update_run(self.run_id, status="running")
+        remember_workers(self.store, self.run_id, self.lean_workers)
 
     def publish(self, reason: str) -> dict:
         run = self.store.get_run(self.run_id)
@@ -354,6 +458,8 @@ class Engine:
             "checkpoint_seq": None if checkpoint is None else checkpoint["seq"],
             "advancement_frozen": bool(run["advancement_frozen"]),
             "learning": learning_claimed(self.store),
+            **train_snapshot(self.store, self.run_id),
+            **minilm.counts(self.store, self.run_id),
         }
 
     def promote_if_ready(self) -> bool:
@@ -455,6 +561,32 @@ class Engine:
             counterexample_id=counterexample_id,
         )
         return self.store.get_candidate(candidate_id)["current_status"]
+
+    def _commit_validation(
+        self,
+        *,
+        candidate_id: int,
+        source: str,
+        validation_type: str,
+        idempotency_key: str,
+        counterexample_id=None,
+        job=None,
+    ) -> dict:
+        request = self._bound_request(
+            candidate_id=candidate_id,
+            source=source,
+            validation_type=validation_type,
+            idempotency_key=idempotency_key,
+            counterexample_id=counterexample_id,
+        )
+        recorded = self._execute_lean(request)
+        self.hooks.hit("after_validate_before_commit")
+        if recorded["result"] == "unavailable":
+            if job is not None:
+                self._release_unavailable(job, recorded)
+            return recorded
+        self._write_lean(request, recorded, job)
+        return recorded
 
     def replay_into(self, dest_store, from_seq: int, backend_factory=ReplayBackend) -> bool:
         row = self.store.get_checkpoint(self.run_id, from_seq)
@@ -634,12 +766,7 @@ class Engine:
         except Exception as exc:
             if job["job_type"] == "propose":
                 return self._retry_propose(job, exc)
-            self.queue.fail(job)
-            self.store.append_event(
-                self.run_id,
-                "job_failed",
-                {"job_id": job["id"], "error": str(exc)},
-            )
+            self._fail_job(job, exc)
             return "failed"
 
     def _retry_propose(self, job: dict, exc: BaseException) -> str:
@@ -708,13 +835,25 @@ class Engine:
     def _propose_committed(self, job: dict, state_before: int, scheduler_before: dict, index_before: int) -> str:
         self.scheduler["last_mix"] = self.rng.next_u32()
         self.scheduler["batch_index"] = index_before + 1
-        items = build_batch(
+        seen = self.store.structural_hashes(self.run_id)
+        forward = novel_batch(
             self.level,
             seed=self.seed,
             count=self.batch_count,
             batch_index=index_before,
             run_id=self.run_id,
+            seen=seen,
         )
+        reviewed = review_items(
+            self.level,
+            seed=self.seed,
+            count=self.batch_count,
+            batch_index=index_before,
+            run_id=self.run_id,
+            seen=set(seen) | {item.structural_hash for item in forward},
+        )
+        occupied = set(seen) | {item.structural_hash for item in forward + reviewed}
+        items = forward + reviewed + rich_items(self.seed, index_before, self.run_id, occupied)
         counts = {}
         for item in items:
             counts["lean_validate"] = counts.get("lean_validate", 0) + 1
@@ -722,7 +861,8 @@ class Engine:
                 counts["prove_primary"] = counts.get("prove_primary", 0) + 1
                 counts["prove_alternate_or_critique"] = counts.get("prove_alternate_or_critique", 0) + 1
         for job_type, count in counts.items():
-            if self.queue.occupancy(self.run_id, job_type) + count > self.queue.high_water:
+            lane = "generator" if job_type == "lean_validate" else None
+            if self.queue.occupancy(self.run_id, job_type, origin=lane) + count > self.queue.high_water:
                 self._rewind_propose(state_before, scheduler_before, job)
                 return "held"
         prepared = []
@@ -795,6 +935,7 @@ class Engine:
                     idempotency_key=(
                         f"{self.run_id}:lean_validate:{item.stable_id}:{item.validation_type}"
                     ),
+                    origin="generator",
                 )
                 if item.needs_roles:
                     self.queue.enqueue(
@@ -828,11 +969,7 @@ class Engine:
             "family": item.family,
         }
         if not item.needs_roles:
-            return {
-                "prompt": item.canonical_ast_json,
-                "raw": item.canonical_ast_json,
-                "model_version": "generator",
-            }
+            return self._generator_proposal(item)
         found = retrieve(
             self.store,
             self.run_id,
@@ -840,10 +977,25 @@ class Engine:
             family=item.family,
         )
         prompt = proposer_prompt(candidate, found)
+        try:
+            raw = self.slot.complete("theorem_proposer", prompt)
+        except LearnError as exc:
+            if str(exc) != "live inference is not available":
+                raise
+            # No weights are loaded. Keep the generator statement and skip role jobs.
+            item.needs_roles = False
+            return self._generator_proposal(item)
         return {
             "prompt": prompt,
-            "raw": self.slot.complete("theorem_proposer", prompt),
+            "raw": raw,
             "model_version": self.slot.model_version,
+        }
+
+    def _generator_proposal(self, item) -> dict:
+        return {
+            "prompt": item.canonical_ast_json,
+            "raw": item.canonical_ast_json,
+            "model_version": "generator",
         }
 
     def _role(self, job: dict, role: str, phase: str) -> str:
@@ -925,28 +1077,28 @@ class Engine:
         )
 
     def _lean(self, job: dict) -> str:
+        request = self._lean_request(job)
+        recorded = self._execute_lean(request)
+        return self._finish_lean(job, request, recorded)
+
+    def _lean_request(self, job: dict) -> dict:
         payload = json.loads(job["payload_json"])
-        recorded = self._commit_validation(
+        return self._bound_request(
             candidate_id=payload["candidate_id"],
             source=payload["source"],
             validation_type=payload["validation_type"],
             idempotency_key=job["idempotency_key"],
             counterexample_id=payload.get("counterexample_id"),
-            job=job,
         )
-        if recorded.get("result") == "unavailable":
-            return "released"
-        return "done"
 
-    def _commit_validation(
+    def _bound_request(
         self,
         *,
         candidate_id: int,
         source: str,
         validation_type: str,
         idempotency_key: str,
-        counterexample_id=None,
-        job=None,
+        counterexample_id,
     ) -> dict:
         if validation_type == "counterexample":
             if not counterexample_id:
@@ -956,37 +1108,64 @@ class Engine:
             self._require_bound_source(candidate_id, validation_type, source)
         else:
             raise LearnError(f"unknown validation type: {validation_type}")
+        return {
+            "candidate_id": candidate_id,
+            "source": source,
+            "validation_type": validation_type,
+            "idempotency_key": idempotency_key,
+            "counterexample_id": counterexample_id,
+        }
+
+    def _execute_lean(self, request: dict) -> dict:
+        """Lean only. Callers on other threads must not touch SQLite."""
+        started = time.perf_counter()
         recorded = validate_source(
-            source,
-            validation_type=validation_type,
+            request["source"],
+            validation_type=request["validation_type"],
             project_dir=self.project_dir,
             timeout_s=self.lean_timeout_s,
             runner=self.runner,
         )
+        recorded["lean_ms"] = int((time.perf_counter() - started) * 1000)
+        return recorded
+
+    def _finish_lean(self, job: dict, request: dict, recorded: dict) -> str:
         self.hooks.hit("after_validate_before_commit")
         if recorded["result"] == "unavailable":
-            # Do not write a validation. The job key would make the miss permanent.
-            if job is not None:
-                self.queue.release_job(job)
-                self.lean_block = recorded["message"]
-                self.pause_requested = True
-                self.store.append_event(
-                    self.run_id,
-                    "lean_unavailable",
-                    {"job_id": job["id"], "message": recorded["message"][:500]},
-                )
-            return recorded
+            self._release_unavailable(job, recorded)
+            return "released"
+        self._write_lean(request, recorded, job)
+        return "done"
+
+    def _release_unavailable(self, job: dict, recorded: dict) -> None:
+        # Do not write a validation. The job key would make the miss permanent.
+        self.queue.release_job(job)
+        self.lean_block = recorded["message"]
+        self.pause_requested = True
+        self.store.append_event(
+            self.run_id,
+            "lean_unavailable",
+            {"job_id": job["id"], "message": recorded["message"][:500]},
+        )
+
+    def _write_lean(self, request: dict, recorded: dict, job) -> None:
         with self.store.transaction():
             row = self.store.insert_validation(
-                candidate_id=candidate_id,
-                idempotency_key=idempotency_key,
+                candidate_id=request["candidate_id"],
+                idempotency_key=request["idempotency_key"],
                 **recorded,
             )
-            if counterexample_id and row["accepted"]:
-                self.store.set_certificate(counterexample_id, row["id"])
+            if request["counterexample_id"] and row["accepted"]:
+                self.store.set_certificate(request["counterexample_id"], row["id"])
             if job is not None:
                 self.queue.complete(job)
-        return row
+            candidate = self.store.get_candidate(request["candidate_id"])
+            enqueue_train(self.store, self.run_id, candidate)
+        if self._language is not None and candidate is not None:
+            try:
+                self._language.note_verdict(self.store, candidate)
+            except Exception as exc:
+                print(f"lm verdict error: {exc}", flush=True)
 
     def _search(self, job: dict) -> None:
         payload = json.loads(job["payload_json"])
@@ -997,6 +1176,10 @@ class Engine:
                 return
             candidate = self.store.get_candidate(payload["candidate_id"])
             source = negation_source(witness["instantiated_prop"], candidate["stable_id"])
+            try:
+                lane = json.loads(candidate["provenance"]).get("origin")
+            except (TypeError, json.JSONDecodeError):
+                lane = None
             self.queue.enqueue(
                 self.run_id,
                 "lean_validate",
@@ -1007,6 +1190,7 @@ class Engine:
                     "counterexample_id": witness["id"],
                 },
                 idempotency_key=f"{self.run_id}:cert:{candidate['stable_id']}",
+                origin="model" if lane == "model" else "generator",
             )
 
     def _fast_forward_scheduler(self, cursor: int) -> None:

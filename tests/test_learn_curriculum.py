@@ -15,7 +15,7 @@ for item in (str(ROOT), str(TESTS)):
 from learn_support import make_engine, seed_proved_cohort
 from theorem_gen.expr import Compare, NatLit
 from theorem_gen.learn.astjson import canonical_json, structural_hash
-from theorem_gen.learn.batches import build_batch, source_for
+from theorem_gen.learn.batches import build_batch, novel_batch, review_items, review_level_for, source_for
 from theorem_gen.learn.curriculum import (
     MIN_EVALUATED,
     WINDOW_SIZE,
@@ -62,6 +62,97 @@ class CurriculumTests(unittest.TestCase):
         self.assertTrue(any(item.needs_roles for item in level7))
         with self.assertRaises(LearnError):
             alternate_prompt({"stable_id": "c", "canonical_ast_json": "{}"}, "prove", primary="secret")
+
+    def test_higher_levels_rehearse_earlier_material_outside_the_gate(self):
+        self.assertIsNone(review_level_for(1, 0))
+        self.assertEqual(review_items(1, seed=1, count=4, batch_index=0), ())
+        self.assertEqual(review_level_for(2, 0), 1)
+        self.assertEqual(review_level_for(2, 5), 1)
+        self.assertEqual(review_level_for(3, 0), 1)
+        self.assertEqual(review_level_for(3, 1), 2)
+        reviewed = review_items(2, seed=1, count=4, batch_index=3, run_id="run-1")
+        self.assertTrue(reviewed)
+        self.assertTrue(all(item.provenance["review"] is True for item in reviewed))
+        self.assertTrue(all(item.provenance["source_level"] == 1 for item in reviewed))
+        self.assertTrue(all(item.stable_id.endswith(":review:1:3") for item in reviewed))
+        self.assertTrue(all(not item.needs_roles for item in reviewed))
+        forward = build_batch(2, seed=1, count=4, batch_index=3, run_id="run-1")
+        self.assertTrue(set(item.stable_id for item in reviewed).isdisjoint(item.stable_id for item in forward))
+        first = review_items(7, seed=1, count=2, batch_index=5, run_id="run-1")
+        second = review_items(7, seed=1, count=2, batch_index=11, run_id="run-1")
+        first_def = next(item for item in first if item.candidate_kind == "definition")
+        second_def = next(item for item in second if item.candidate_kind == "definition")
+        self.assertNotEqual(first_def.stable_id, second_def.stable_id)
+        self.assertEqual(first_def.provenance["source_level"], 6)
+        theorem = next(item for item in first if item.candidate_kind == "theorem" and item.depends_on)
+        self.assertIn(first_def.stable_id, theorem.depends_on)
+
+    def test_novel_batch_skips_hashes_the_run_already_stored(self):
+        plain = build_batch(1, seed=3, count=2, batch_index=4, run_id="run-1")
+        again = novel_batch(1, seed=3, count=2, batch_index=4, run_id="run-1", seen=())
+        self.assertEqual(
+            [item.structural_hash for item in plain],
+            [item.structural_hash for item in again],
+        )
+        occupied = build_batch(3, seed=1, count=8, batch_index=1, run_id="run-1")
+        seen = {item.structural_hash for item in occupied}
+        fresh = novel_batch(3, seed=1, count=8, batch_index=1, run_id="run-1", seen=seen)
+        self.assertTrue(fresh)
+        self.assertTrue({item.structural_hash for item in fresh}.isdisjoint(seen))
+        self.assertGreater(len({item.proof_method for item in fresh if item.proof_method}), 1)
+
+    def test_review_rows_do_not_freeze_or_fill_the_promotion_gate(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = make_engine(tmp)
+            engine.bootstrap()
+            seed_proved_cohort(engine.store, "run-1", 1, MIN_EVALUATED)
+            _seed_identical_reviews(engine.store, 300)
+            self.assertTrue(engine.maybe_promote())
+            self.assertEqual(engine.level, 2)
+            self.assertFalse(engine.store.get_run("run-1")["advancement_frozen"])
+
+    def test_training_selection_interleaves_a_reviewed_level(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = make_engine(tmp)
+            engine.bootstrap()
+            for index, provenance, level in (
+                (0, {"generator": "generate_general"}, 2),
+                (1, {"generator": "generate_general"}, 2),
+                (2, {"generator": "generate_general"}, 2),
+                (3, {"generator": "generate", "review": True, "source_level": 1}, 2),
+            ):
+                row = engine.store.upsert_candidate(
+                    stable_id=f"mix-{index}",
+                    run_id="run-1",
+                    canonical_ast_json="{}",
+                    structural_hash=hashlib.sha256(f"mix-{index}".encode("utf-8")).hexdigest(),
+                    kind="theorem",
+                    provenance=json.dumps(provenance, sort_keys=True),
+                    curriculum_level=level,
+                    family="add",
+                    ast_size=4,
+                    depth=2,
+                    proof_method="rfl",
+                )
+                engine.store.insert_validation(
+                    candidate_id=row["id"],
+                    lean_version="fixture",
+                    toolchain_hash="fixture",
+                    validation_type="proof",
+                    result="accepted",
+                    accepted=True,
+                    message="ok",
+                    idempotency_key=f"mix-proof-{index}",
+                    stdout="",
+                    stderr="",
+                    failure_class=None,
+                )
+            rows = select_training_rows(engine.store, "run-1")
+            levels = []
+            for row in rows:
+                payload = json.loads(row["provenance"])
+                levels.append(payload["source_level"] if payload.get("review") else row["curriculum_level"])
+            self.assertEqual(levels[:2], [1, 2])
 
     def test_coverage_follows_the_new_surface_and_does_not_grow_with_the_index(self):
         concrete = [_coverage_row("generate")] * MIN_EVALUATED
@@ -402,6 +493,66 @@ class CurriculumTests(unittest.TestCase):
             )
             return engine.store.get_candidate(row["id"])
         return row
+
+
+def _seed_identical_reviews(store, count: int) -> None:
+    now = store.now()
+    structural = hashlib.sha256(b"review-same").hexdigest()
+    provenance = json.dumps({"generator": "generate", "review": True, "source_level": 1}, sort_keys=True)
+    rows = []
+    for index in range(count):
+        rows.append(
+            (
+                f"review-{index}",
+                "run-1",
+                "{}",
+                structural,
+                "theorem",
+                provenance,
+                "unresolved",
+                1,
+                None,
+                "add",
+                1,
+                1,
+                "rfl",
+                0,
+                0,
+                now,
+                now,
+            )
+        )
+    with store.transaction():
+        store.conn.executemany(
+            """
+            INSERT INTO candidates (
+              stable_id, run_id, canonical_ast_json, structural_hash, kind, provenance,
+              current_status, curriculum_level, ancestor_stable_id, family, ast_size, depth,
+              proof_method, dependency_depth, held_out, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            rows,
+        )
+        found = store.conn.execute(
+            "SELECT id, stable_id FROM candidates WHERE stable_id LIKE 'review-%' ORDER BY id"
+        ).fetchall()
+        store.conn.executemany(
+            """
+            INSERT INTO validations (
+              candidate_id, attempt_id, lean_version, toolchain_hash, validation_type,
+              result, accepted, stdout, stderr, message, failure_class, idempotency_key, created_at
+            ) VALUES (?, NULL, 'fixture', 'fixture', 'proof', 'accepted', 1, '', '', 'review', NULL, ?, ?)
+            """,
+            [(row["id"], f"review-val-{row['stable_id']}", now) for row in found],
+        )
+        store.conn.execute(
+            """
+            UPDATE candidates
+            SET current_status='proved', updated_at=?
+            WHERE stable_id LIKE 'review-%'
+            """,
+            (now,),
+        )
 
 
 def _coverage_row(generator: str, kind: str = "theorem") -> dict:

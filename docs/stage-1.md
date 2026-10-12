@@ -1,33 +1,29 @@
-# Etap 1 — minimalny generator arytmetyczny
+# Stage 1 — a minimal arithmetic generator
 
-> Data ukończenia: 2026-10-11
-> Status: ukończony
+> Completed: 2026-10-11
+> Status: done
 
-## 1. Zaimplementowany zakres
+## 1. What was implemented
 
-- typowane, niemutowalne AST: `NatLit`, `BinOp`, `Compare`
-- typy `Nat` i `Prop`; operatory `+`, `*`, `=`, `<=`, `<`
-- 12 jawnych reguł tworzących prawdziwe zdania o konkretnych liczbach
-- oddzielenie zdania, dowodu (`rfl` / `decide`) i metadanych
-- deterministyczny 32-bitowy LCG, stabilny między wersjami Pythona
-- konfiguracja liczby wyników, granic, głębokości, reguł i unikalności
-- eksport ograniczonego podzbioru Lean 4 bez zmiany znaczenia AST
+- a typed, immutable AST: `NatLit`, `BinOp`, `Compare`
+- types `Nat` and `Prop`; operators `+`, `*`, `=`, `<=`, `<`
+- 12 explicit rules that build true sentences about concrete numbers
+- separation of the sentence, the proof (`rfl` / `decide`), and the metadata
+- a deterministic 32-bit LCG, stable across Python versions
+- configuration of the result count, bounds, depth, rules, and uniqueness
+- export of a bounded Lean 4 subset without changing the meaning of the AST
 - CLI `python3 -m theorem_gen generate`
-- weryfikacja przez prawdziwy Lean z timeoutem, limitem CPU i zabijaniem grupy
-  procesów
-- jawne statusy `proved`, `failed`, `timeout`, `unavailable`
-- osobna klasyfikacja błędu: `syntax`, `typing`, `proof`, `rejected`, `other`
-- gotowy przykład `lean/TheoremGen/Generated.lean`
+- verification by real Lean with a timeout, a CPU limit, and killing the process group
+- explicit statuses `proved`, `failed`, `timeout`, `unavailable`
+- a separate error classification: `syntax`, `typing`, `proof`, `rejected`, `other`
+- a ready example `lean/TheoremGen/Generated.lean`
 
-W samym etapie 1 nie dodano zmiennych, kwantyfikatorów, założeń, rejestru
-zależności ani generowania hipotez. Te możliwości doszły w etapach 2–8 i nie
-zmieniają domyślnego generatora konkretnych twierdzeń.
+Stage 1 itself did not add variables, quantifiers, assumptions, a dependency registry, or hypothesis generation. Those arrived in stages 2–8 and do not change the default generator of concrete theorems.
 
-## 2. Przebieg TDD
+## 2. TDD path
 
-1. Przed pakietem `theorem_gen` zapisano testy AST, RNG, generatora, eksportu,
-   CLI i weryfikatora.
-2. Pierwsze uruchomienie:
+1. Before the `theorem_gen` package, tests were written for the AST, RNG, generator, export, CLI, and verifier.
+2. The first run:
 
    ```text
    Ran 7 tests
@@ -35,35 +31,24 @@ zmieniają domyślnego generatora konkretnych twierdzeń.
    ModuleNotFoundError: No module named 'theorem_gen'
    ```
 
-3. Po minimalnej implementacji zestaw jednostkowy wykrył błąd w samym teście
-   sekwencji RNG (tworzona była nowa instancja dla każdej liczby). Test
-   poprawiono tak, by badał jedną sekwencję.
-4. Po implementacji integracji pierwszy pełny zestaw dał `67 tests ... OK`.
-5. Audyt dodał test procesu zabitego sygnałem i test `lake build`; zestaw
-   wzrósł do 69.
-6. Końcowa, rzeczywista komenda CLI ze względnym `--out` wykryła regresję:
-   Lean szukał `lean/lean/TheoremGen/Generated.lean`. Najpierw dodano test
-   `test_relative_destination_is_made_absolute_before_changing_cwd` i
-   potwierdzono jego czerwony wynik, następnie weryfikator zaczął rozwiązywać
-   ścieżki przed zmianą katalogu procesu.
-7. Końcowy zestaw ma 70 testów.
+3. After a minimal implementation the unit suite found a bug in the RNG sequence test itself (a new instance was created for each number). The test was fixed so it examines one sequence.
+4. After the integration was implemented the first full suite gave `67 tests ... OK`.
+5. An audit added a test of a process killed by a signal and a `lake build` test; the suite grew to 69.
+6. The final, real CLI command with a relative `--out` found a regression: Lean looked for `lean/lean/TheoremGen/Generated.lean`. The test `test_relative_destination_is_made_absolute_before_changing_cwd` was added first and confirmed red, then the verifier began resolving paths before changing the process directory.
+7. The final suite has 70 tests.
 
-## 3. Dodane testy
+## 3. Tests added
 
-- jednostkowe: AST, typowanie, ewaluacja, klucze strukturalne, RNG, eksport
-- deterministyczność: złota sekwencja i powtarzalność konfiguracji
-- brzegowe: zero wyników, ujemny seed, `max_literal = 0`, wyczerpanie
-  unikalności, pusty zbiór reguł, limit prób
-- regresyjne: względna ścieżka pliku przy innym `cwd`, sygnał/limit procesu,
-  `sorry` przy kodzie 0, priorytet błędu dowodu nad tekstem `Type mismatch`
-- właściwościowe bez zależności zewnętrznych: wiele seedów daje prawdziwe,
-  unikalne zdania bez `sorry`; dodatkowa sonda 100 seedów po 8 twierdzeń
-- integracyjne: poprawny batch, fałszywa równość, błąd typu, błąd składni,
-  dokładność zapisanego przykładu, CLI z `--verify`, czysty `lake build`
+- unit: AST, typing, evaluation, structural keys, RNG, export
+- determinism: a golden sequence and configuration repeatability
+- edges: zero results, a negative seed, `max_literal = 0`, uniqueness exhaustion, an empty rule set, the attempt limit
+- regression: a relative file path under a different `cwd`, a signal or process limit, `sorry` at exit code 0, proof-error priority over the text `Type mismatch`
+- property tests with no external dependency: many seeds give true, unique sentences with no `sorry`; an extra probe of 100 seeds of 8 theorems
+- integration: a correct batch, a false equality, a type error, a syntax error, byte accuracy of the saved example, CLI with `--verify`, a clean `lake build`
 
-## 4. Rzeczywiście uruchomione polecenia
+## 4. Commands actually run
 
-Z katalogu repozytorium:
+From the repository root:
 
 ```sh
 export ELAN_HOME="$PWD/.toolchains/elan"
@@ -78,7 +63,7 @@ python3 -m theorem_gen generate \
   --timeout 120
 ```
 
-Z katalogu `lean/`:
+From `lean/`:
 
 ```sh
 export ELAN_HOME="$PWD/../.toolchains/elan"
@@ -87,14 +72,14 @@ lake clean
 lake build
 ```
 
-Dodatkowo:
+Also:
 
 ```sh
 python3 -m compileall -q theorem_gen tests
 git diff --check
 ```
 
-## 5. Wyniki
+## 5. Results
 
 ```text
 Python 3.9.6
@@ -113,37 +98,25 @@ Build completed successfully (4 jobs).
 100 seeds x 8: OK
 ```
 
-Przykład jest bajt w bajt zgodny z wynikiem `export_module(generate(...))`.
-IDE nie raportuje błędów lintera. `compileall` i `git diff --check` kończą się
-kodem 0.
+The example matches `export_module(generate(...))` byte for byte.
+The IDE reports no linter errors. `compileall` and `git diff --check` exit 0.
 
-## 6. Znane ograniczenia
+## 6. Known limits
 
-- generator `generate` tworzy tylko konkretne zdania o `Nat`; zmienne i kwantyfikatory są w modułach etapów 2–8
-- brak Mathlib; etap 1 korzysta z Lean prelude
-- LCG używa modulo w `randint`, więc rozkład może być lekko skośny, ale jest
-  deterministyczny
-- na Darwin/Python 3.9 nie działa ustawienie `RLIMIT_AS`; działają timeout i
-  `RLIMIT_CPU`. Mechanizm limitu CPU jest uniksowy.
-- `verify_source` jest przeznaczone dla zaufanego kodu z eksportera etapu 1.
-  Bramka odrzuca konstrukcje wykonawcze i niedokończone dowody, ale nie jest
-  pełnym sandboxem dla dowolnego kodu Lean.
-- warning `declaration uses sorry` jest odrzucany mimo kodu 0. Pozostałe
-  wyniki Lean są oceniane przede wszystkim według kodu procesu.
-- `max_value` ogranicza wartości obu stron, a nie rozmiar AST ani trudność;
-  pełne sterowanie złożonością należy do etapu 5.
+- `generate` builds only concrete sentences about `Nat`; variables and quantifiers are in the stage 2–8 modules
+- no Mathlib; stage 1 uses the Lean prelude
+- the LCG uses modulo in `randint`, so the distribution can be slightly skewed, but it is deterministic
+- on Darwin/Python 3.9 setting `RLIMIT_AS` does not work; the timeout and `RLIMIT_CPU` do. The CPU limit is a Unix mechanism.
+- `verify_source` is meant for trusted code from the stage 1 exporter. The gate rejects executable constructions and unfinished proofs, but it is not a full sandbox for arbitrary Lean.
+- the warning `declaration uses sorry` is rejected despite exit code 0. Other Lean results are judged first by the process exit code.
+- `max_value` bounds the values of both sides, not the AST size or the difficulty; full complexity control belongs to stage 5.
 
-## 7. Ocena kryteriów
+## 7. Criteria
 
-Wszystkie kryteria etapu 1 z [stages.md](stages.md) są spełnione:
-deterministyczność, liczba wyników, opcjonalna unikalność, poprawny eksport,
-rzeczywista weryfikacja Lean, jawne błędy, testy oraz ten raport.
+Every stage 1 criterion in [stages.md](stages.md) is met: determinism, result count, optional uniqueness, a correct export, real Lean verification, explicit errors, tests, and this report.
 
-Niezależny audyt nie znalazł błędów krytycznych ani wysokich. W trakcie
-końcowej weryfikacji poprawiono dodatkowo regresję ścieżki względnej i ponownie
-uruchomiono cały zestaw.
+An independent audit found no critical or high defects. During the final verification the relative-path regression was fixed and the whole suite was run again.
 
-## 8. Następny krok
+## 8. Next step
 
-W momencie zamknięcia etapu 1 kolejnym krokiem był etap 2. Został zrealizowany
-później. Aktualny stan etapów 2–8 jest w `docs/stage-2.md` … `docs/stage-8.md`.
+When stage 1 closed, the next step was stage 2. It was built later. The current state of stages 2–8 is in `docs/stage-2.md` … `docs/stage-8.md`.

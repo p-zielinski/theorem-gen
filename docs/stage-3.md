@@ -1,39 +1,39 @@
-# Etap 3 — szersze AST
+# Stage 3 — a wider AST
 
-> Data ukończenia: 2026-10-11
-> Status: ukończony
+> Completed: 2026-10-11
+> Status: done
 
-## 1. Zaimplementowany zakres
+## 1. What was implemented
 
-Do drzewa doszły: `IntLit`, `Var` (`Nat`, `Int`, `Prop`), `UnaryOp` (`succ`, `neg`), `Const`, `Atom`, `Implies`, `Forall`.
+The tree gained: `IntLit`, `Var` (`Nat`, `Int`, `Prop`), `UnaryOp` (`succ`, `neg`), `Const`, `Atom`, `Implies`, `Forall`.
 
-Niedozwolone kombinacje nie powstają i nie są przepisywane na inne znaczenie:
+Forbidden combinations are not built and are not rewritten into another meaning:
 
 - `Nat + Int` → `TypingError` (`cannot apply add to Nat and Int`)
-- `neg` na `Nat` i `succ` na `Int` → błąd typu
-- `pred` → błąd, bo obcięty poprzednik na `Nat` zamienia 0 na 0
-- stała `Nat` zastosowana do `Int` oraz atom zastosowany do zdania → błąd typu
-- wolna zmienna i zdublowany binder w `Forall` → błąd
+- `neg` on `Nat` and `succ` on `Int` → a type error
+- `pred` → an error, because a truncated predecessor on `Nat` turns 0 into 0
+- a `Nat` constant applied to `Int`, and an atom applied to a sentence → a type error
+- a free variable and a duplicated binder in `Forall` → an error
 
-Eksport zachowuje kształt: `(Nat.succ 2)`, `((1 : Int) + (-1 : Int))`, `(-(1 : Int))`, `(P a)`. Generator konkretny etapu 1 tych konstrukcji nie losuje. Atom bez deklaracji Lean odrzuca; plik z samym `#check` nie staje się dowodem.
+Export keeps the shape: `(Nat.succ 2)`, `((1 : Int) + (-1 : Int))`, `(-(1 : Int))`, `(P a)`. The stage 1 concrete generator does not draw these constructions. Lean rejects an atom with no declaration; a file that is only `#check` does not become a proof.
 
-## 2. Testy
+## 2. Tests
 
-- `tests/test_stage3.py`: ewaluacja `succ`, eksport `succ`, `neg` i atomu, odrzucenie złych typów, `pred`, bindery, implikacja z `Nat` zamiast `Prop`
-- Lean: `(Nat.succ 2) = 3`, `((1 : Int) + (-1 : Int)) = (0 : Int)` oraz `(-(1 : Int)) = (-1 : Int)` kończą się statusem `proved`. `#check` niezadeklarowanego atomu `P` kończy się błędem.
+- `tests/test_stage3.py`: `succ` evaluation, export of `succ`, `neg`, and an atom, rejection of bad types, `pred`, binders, an implication with `Nat` instead of `Prop`
+- Lean: `(Nat.succ 2) = 3`, `((1 : Int) + (-1 : Int)) = (0 : Int)`, and `(-(1 : Int)) = (-1 : Int)` end with status `proved`. `#check` of an undeclared atom `P` ends in an error.
 
-## 3. Polecenia i wyniki
+## 3. Commands and results
 
-Wspólny przebieg jest w [stage-8.md](stage-8.md). Test `test_succ_and_int_decide` przechodzi na Lean 4.34.1.
+The shared run is in [stage-8.md](stage-8.md). `test_succ_and_int_decide` passes on Lean 4.34.1.
 
-## 4. Ograniczenia
+## 4. Limits
 
-Nie ma odejmowania, dzielenia ani ogólnych twierdzeń o `Int` w generatorze. `Int` występuje w ręcznie zbudowanych drzewach i w eksporcie. `Atom` nie ma interpretacji w Leanie; nie jest wysyłany jako twierdzenie.
+There is no subtraction, division, or general theorems about `Int` in the generator. `Int` appears in hand-built trees and in the export. `Atom` has no interpretation in Lean; it is not sent as a theorem.
 
-## 5. Ocena kryteriów
+## 5. Criteria
 
-Kryterium etapu 3 jest spełnione: nowe konstrukcje mają testy typowania, eksportu i Leana, a zła kombinacja typów kończy się wyjątkiem.
+The stage 3 criterion is met: the new constructions have typing, export, and Lean tests, and a bad combination of types ends in an exception.
 
-## 6. Następny krok
+## 6. Next step
 
-Etap 4 zapisuje stabilne identyfikatory i zależności.
+Stage 4 records stable identifiers and dependencies.

@@ -13,6 +13,7 @@ from theorem_gen.learn.engine import Engine
 from theorem_gen.learn.errors import LearnError
 from theorem_gen.learn.memory import report as memory_report
 from theorem_gen.learn.store import Store
+from theorem_gen.learn.train import default_lean_workers
 
 _DEFAULT_DB = Path("var/learn.sqlite")
 
@@ -44,12 +45,21 @@ def main(argv=None) -> int:
 
     sub.add_parser("memory")
 
+    board = sub.add_parser("dashboard")
+    _db_args(board)
+    board.add_argument("--port", type=int, default=8765)
+
     args = parser.parse_args(argv)
     try:
         if args.command == "memory":
             info = memory_report()
             _print_memory(info)
             return 0 if info["within_budget"] else 1
+        if args.command == "dashboard":
+            from theorem_gen.learn.dashboard import serve
+
+            serve(args.db, args.run_id, port=args.port)
+            return 0
         store = Store(args.db, clock=Clock())
         if args.command == "start":
             return _start(store, args)
@@ -72,6 +82,8 @@ def _run_args(parser) -> None:
     parser.add_argument("--max-steps", type=int, default=None)
     parser.add_argument("--checkpoint-interval", type=int, default=300)
     parser.add_argument("--timeout", type=float, default=60.0)
+    parser.add_argument("--lean-workers", type=int, default=None)
+    parser.add_argument("--lm", action="store_true")
 
 
 def _db_args(parser) -> None:
@@ -94,6 +106,8 @@ def _start(store, args) -> int:
         lean_timeout_s=args.timeout,
         until_pause=args.until_pause,
         refill_when_idle=True,
+        lean_workers=_choose_workers(args),
+        lm=bool(getattr(args, "lm", False)),
     )
     with _signals(engine):
         engine.start()
@@ -184,6 +198,8 @@ def _engine_for_existing(store, args, *, max_steps, until_pause: bool = False, r
         lean_timeout_s=timeout,
         until_pause=until_pause,
         refill_when_idle=refill_when_idle,
+        lean_workers=_choose_workers(args),
+        lm=bool(getattr(args, "lm", False)),
     )
 
 
@@ -206,6 +222,13 @@ class _signals:
         return False
 
 
+def _choose_workers(args) -> int:
+    chosen = getattr(args, "lean_workers", None)
+    if chosen is None:
+        return default_lean_workers()
+    return chosen
+
+
 def _print_status(info: dict) -> None:
     print(f"status: {info['status']}")
     print(f"curriculum_level: {info['curriculum_level']}")
@@ -218,6 +241,15 @@ def _print_status(info: dict) -> None:
     print("queue: " + ",".join(parts))
     print(f"checkpoint_seq: {info['checkpoint_seq']}")
     print(f"learning: {'yes' if info['learning'] else 'no'}")
+    workers = info.get("lean_workers")
+    print(f"lean_workers: {workers if workers is not None else 'unset'}")
+    print(f"train_queued: {info.get('train_queued', 0)}")
+    print(f"weight_step: {info.get('weight_step', 0)}")
+    print(f"lm_step: {info.get('lm_step', 0)}")
+    print(f"lm_epoch: {info.get('lm_epoch', 0)}")
+    print(f"lm_loss: {info.get('lm_loss')}")
+    print(f"lm_hold: {'yes' if info.get('lm_hold') else 'no'}")
+    print(f"lm_weak: {info.get('lm_weak', 0)}")
 
 
 def _print_memory(info: dict) -> None:

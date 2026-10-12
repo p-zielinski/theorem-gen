@@ -55,6 +55,31 @@ class RuntimeTests(unittest.TestCase):
             with self.assertRaises(Backpressure):
                 queue.enqueue("run-1", "lean_validate", payload={"n": 4}, idempotency_key="v3")
             self.assertEqual(queue.occupancy("run-1", "lean_validate"), 2)
+            queued = queue.enqueue(
+                "run-1",
+                "lean_validate",
+                payload={"n": 7},
+                idempotency_key="model-lane",
+                origin="model",
+            )
+            self.assertEqual(queued["state"], "queued")
+            self.assertEqual(queue.occupancy("run-1", "lean_validate", origin="generator"), 2)
+            self.assertEqual(queue.occupancy("run-1", "lean_validate", origin="model"), 1)
+            queue.enqueue(
+                "run-1",
+                "lean_validate",
+                payload={"n": 8},
+                idempotency_key="model-lane-2",
+                origin="model",
+            )
+            with self.assertRaises(Backpressure):
+                queue.enqueue(
+                    "run-1",
+                    "lean_validate",
+                    payload={"n": 9},
+                    idempotency_key="model-lane-3",
+                    origin="model",
+                )
             again = queue.enqueue("run-1", "lean_validate", payload={"n": 9}, idempotency_key="v")
             self.assertEqual(again["id"], first["id"])
             job = queue.dequeue("run-1", "lean", ("lean_validate", "propose"), engine.hooks)
@@ -298,12 +323,12 @@ class RuntimeTests(unittest.TestCase):
             self.assertTrue(all(row["current_status"] == "proved" for row in rows))
 
     def test_a_failed_proposal_stays_queued_and_can_finish(self):
-        import theorem_gen.learn.engine as engine_module
+        import theorem_gen.learn.batches as batches_module
 
         with tempfile.TemporaryDirectory() as tmp:
             engine = make_engine(tmp, batch_count=1, max_steps=20)
             engine.bootstrap()
-            real = engine_module.build_batch
+            real = batches_module.build_batch
             calls = {"n": 0}
 
             def flaky(*args, **kwargs):
@@ -312,7 +337,7 @@ class RuntimeTests(unittest.TestCase):
                     raise RuntimeError("proposal failed")
                 return real(*args, **kwargs)
 
-            engine_module.build_batch = flaky
+            batches_module.build_batch = flaky
             try:
                 engine.run_steps(1)
                 job = engine.store._one(
@@ -323,7 +348,7 @@ class RuntimeTests(unittest.TestCase):
                 self.assertEqual(engine.store.list_candidates("run-1"), [])
                 engine.run_steps(15)
             finally:
-                engine_module.build_batch = real
+                batches_module.build_batch = real
             self.assertGreater(len(engine.store.list_candidates("run-1")), 0)
             done = engine.store._one(
                 "SELECT state FROM queue_jobs WHERE idempotency_key='run-1:propose:0'"
@@ -452,6 +477,64 @@ class RuntimeTests(unittest.TestCase):
             engine.scheduler["batch_index"] = 0
             engine.run_steps(10)
             self.assertEqual(len(engine.store.list_candidates("run-1")), 1)
+
+    def test_level_seven_without_a_model_still_records_candidates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = make_engine(tmp, batch_count=1, max_steps=1)
+            engine.bootstrap()
+            for level in range(1, 7):
+                engine.store.upsert_window(
+                    run_id="run-1",
+                    level=level,
+                    window_index=-1,
+                    metrics_json="{}",
+                    gate_status="passed",
+                    evaluated_count=1000,
+                )
+            engine.store.update_run("run-1", curriculum_level=7)
+            engine.run_steps(1)
+            rows = engine.store.list_candidates("run-1")
+            self.assertTrue(rows)
+            self.assertTrue(all(row["current_status"] == "proved" or row["kind"] != "theorem" for row in rows))
+            self.assertTrue(any(row["current_status"] == "proved" for row in rows))
+            failed = engine.store.count_where(
+                "SELECT COUNT(*) FROM queue_jobs WHERE run_id=? AND state='failed'",
+                ("run-1",),
+            )
+            self.assertEqual(failed, 0)
+            roles = engine.store.count_where(
+                """
+                SELECT COUNT(*) FROM attempts
+                WHERE model_version IS NOT NULL AND model_version != 'generator'
+                """,
+                (),
+            )
+            self.assertEqual(roles, 0)
+
+    def test_a_higher_level_stores_a_lower_level_review(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = make_engine(tmp, batch_count=2, max_steps=1)
+            engine.bootstrap()
+            engine.store.upsert_window(
+                run_id="run-1",
+                level=1,
+                window_index=-1,
+                metrics_json="{}",
+                gate_status="passed",
+                evaluated_count=1000,
+            )
+            engine.store.update_run("run-1", curriculum_level=2)
+            engine.run_steps(1)
+            import json
+
+            rows = engine.store.list_candidates("run-1")
+            reviews = [row for row in rows if json.loads(row["provenance"]).get("review") is True]
+            self.assertTrue(reviews)
+            self.assertTrue(all(json.loads(row["provenance"])["source_level"] == 1 for row in reviews))
+            self.assertTrue(all(row["current_status"] == "proved" for row in reviews))
+            self.assertTrue(
+                any(json.loads(row["provenance"]).get("generator") == "generate_general" for row in rows)
+            )
 
     def test_step_budget_finishes_the_batch_it_already_opened(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -9,6 +9,12 @@ MIGRATIONS = (
     (2, "integrity", "002_integrity.sql"),
     (3, "checks", "003_checks.sql"),
     (4, "identity", "004_identity.sql"),
+    (5, "parallel", "005_parallel.sql"),
+    (6, "qlora", "006_qlora.sql"),
+    (7, "minilm", "007_minilm.sql"),
+    (8, "lean_ms", "008_lean_ms.sql"),
+    (9, "context_block", "009_context_block.sql"),
+    (10, "sample_burst", "010_sample_burst.sql"),
 )
 
 

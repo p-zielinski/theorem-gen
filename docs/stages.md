@@ -1,66 +1,66 @@
-# Etapy i kryteria ukończenia
+# Stages and completion criteria
 
-Kod realizuje etapy 0–8. Domyślny generator konkretny z etapu 1 pozostaje bez zmian.
+The code implements stages 0–8. The default concrete generator from stage 1 stays as it is.
 
-## Etap 0 — analiza
+## Stage 0 — analysis
 
-Status: ukończony. Dowód: [stage-0.md](stage-0.md), [architecture.md](architecture.md).
+Status: done. Evidence: [stage-0.md](stage-0.md), [architecture.md](architecture.md).
 
-Ukończony, gdy wiadomo, jakie narzędzia są dostępne, która część systemu jest w Pythonie, a która w Leanie, jak wyglądają katalogi i interfejs oraz jakie są kryteria kolejnych etapów.
+Done when it is known which tools are available, which part of the system is in Python and which is in Lean, what the directories and the interface look like, and what the criteria of the later stages are.
 
-## Etap 1 — konkretna arytmetyka
+## Stage 1 — concrete arithmetic
 
-Status: ukończony. Raport: [stage-1.md](stage-1.md).
+Status: done. Report: [stage-1.md](stage-1.md).
 
-Ukończony, gdy jednocześnie:
+Done when, all at once:
 
-- to samo ziarno i ta sama konfiguracja dają ten sam zbiór twierdzeń
-- da się poprosić o określoną liczbę przykładów, w tym zero
-- przy `unique` w jednym zbiorze nie ma dwóch zdań o tym samym kluczu; przy braku miejsca powstaje jawny błąd
-- eksport jest poprawnym, wąskim Lean 4 i nie zmienia znaczenia drzewa
-- prawdziwy Lean akceptuje wygenerowany plik
-- błąd kompilacji, timeout i brak narzędzia są rozróżnione; timeout nie jest werdyktem „fałsz”
-- testy jednostkowe, brzegowe, deterministyczne, właściwościowe i integracyjne z Leanem przechodzą
-- raport etapu wymienia uruchomione polecenia i ich wynik
+- the same seed and the same configuration produce the same set of theorems
+- a caller can ask for a given number of examples, including zero
+- with `unique`, one set does not contain two sentences with the same key; when there is no room, the error is explicit
+- the export is valid, narrow Lean 4 and does not change the meaning of the tree
+- real Lean accepts the generated file
+- a compile error, a timeout, and a missing tool are distinguished; a timeout is not a verdict of "false"
+- unit, edge, deterministic, property, and Lean integration tests pass
+- the stage report lists the commands that were run and their results
 
-## Etap 2 — zmienne i twierdzenia ogólne
+## Stage 2 — variables and general theorems
 
-Status: ukończony. Raport: [stage-2.md](stage-2.md).
+Status: done. Report: [stage-2.md](stage-2.md).
 
-Ukończony, gdy generator rozróżnia zdanie konkretne, zdanie dla wszystkich elementów typu, zdanie z założeniami i wyrażenie bez dowodu, a żadnego z nich nie traktuje jako prawdziwego tylko dlatego, że zostało wygenerowane.
+Done when the generator distinguishes a concrete sentence, a sentence for every element of a type, a sentence with assumptions, and an expression with no proof, and treats none of them as true merely because it was generated.
 
-## Etap 3 — szersze AST
+## Stage 3 — a wider AST
 
-Status: ukończony. Raport: [stage-3.md](stage-3.md).
+Status: done. Report: [stage-3.md](stage-3.md).
 
-Ukończony, gdy każda nowa konstrukcja ma testy typowania, eksportu i Leana, a niedozwolona kombinacja typów kończy się błędem zamiast kodu o innym znaczeniu.
+Done when every new construction has typing, export, and Lean tests, and a forbidden combination of types ends in an error instead of code with a different meaning.
 
-## Etap 4 — rejestr i zależności
+## Stage 4 — registry and dependencies
 
-Status: ukończony. Raport: [stage-4.md](stage-4.md).
+Status: done. Report: [stage-4.md](stage-4.md).
 
-Ukończony, gdy wyniki mają stabilne identyfikatory, widać brakującą zależność i cykl, a graf da się odtworzyć z zapisanej historii. Użycie wcześniejszego twierdzenia nie jest liczone jako jego ponowne odkrycie.
+Done when results have stable identifiers, a missing dependency and a cycle are visible, and the graph can be rebuilt from the recorded history. Using an earlier theorem is not counted as discovering it again.
 
-## Etap 5 — złożoność
+## Stage 5 — complexity
 
-Status: ukończony. Raport: [stage-5.md](stage-5.md).
+Status: done. Report: [stage-5.md](stage-5.md).
 
-Ukończony, gdy generowanie umie trafić w zadany zakres kilku miar (rozmiar drzewa, głębokość, liczba zmiennych, operatorów, zależności, definicji), a sama wielkość liczby nie jest jedyną miarą trudności.
+Done when generation can hit a requested range of several measures (tree size, depth, number of variables, operators, dependencies, definitions), and the size of a number is not the only measure of difficulty.
 
-## Etap 6 — definicje
+## Stage 6 — definitions
 
-Status: ukończony. Raport: [stage-6.md](stage-6.md).
+Status: done. Report: [stage-6.md](stage-6.md).
 
-Ukończony, gdy system tworzy definicję w obsługiwanej reprezentacji, sprawdza ją, buduje z niej twierdzenia, zapisuje zależności i przechodzi przez Leana.
+Done when the system creates a definition in the supported representation, checks it, builds theorems from it, records the dependencies, and passes Lean.
 
-## Etap 7 — hipotezy
+## Stage 7 — hypotheses
 
-Status: ukończony. Raport: [stage-7.md](stage-7.md).
+Status: done. Report: [stage-7.md](stage-7.md).
 
-Ukończony, gdy hipoteza może być udowodniona, obalona kontrprzykładem, nierozstrzygnięta albo błędna składniowo lub typowo. Brak dowodu nie jest oznaczany jako fałsz. Jest pomiar powtarzalności i różnorodności.
+Done when a hypothesis can be proved, refuted by a counterexample, left unresolved, or rejected as bad syntax or a bad type. Lack of a proof is not marked as false. There is a measurement of repetition and diversity.
 
-## Etap 8 — otwarta eksploracja
+## Stage 8 — open exploration
 
-Status: ukończony. Raport: [stage-8.md](stage-8.md).
+Status: done. Report: [stage-8.md](stage-8.md).
 
-System tworzy zdania, których sam nie zawsze rozstrzyga. Brak dowodu, fałsz i niedowodliwość w zarejestrowanym fragmencie pozostają różnymi wynikami. Nie ma obietnicy pełnej automatyzacji.
+The system creates sentences it does not always decide itself. Lack of a proof, falsehood, and unprovability inside the registered fragment stay different results. There is no promise of full automation.

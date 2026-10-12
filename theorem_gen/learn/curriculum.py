@@ -12,18 +12,34 @@ CONSECUTIVE_WINDOWS = 3
 NOVELTY_FLOOR = 0.5
 
 
+def is_review(row) -> bool:
+    """Rehearsal of an earlier level. It is Lean-checked and kept for training.
+
+    It does not enter the current level's promotion count or windows.
+    """
+    payload = _provenance(row)
+    source = payload.get("source_level")
+    return (
+        payload.get("review") is True
+        and isinstance(source, int)
+        and not isinstance(source, bool)
+    )
+
+
 def generator_of(row) -> str:
+    generator = _provenance(row).get("generator")
+    return generator if isinstance(generator, str) else ""
+
+
+def _provenance(row) -> dict:
     raw = row["provenance"]
     if not raw:
-        return ""
+        return {}
     try:
         payload = json.loads(raw)
     except (TypeError, json.JSONDecodeError):
-        return ""
-    if not isinstance(payload, dict):
-        return ""
-    generator = payload.get("generator")
-    return generator if isinstance(generator, str) else ""
+        return {}
+    return payload if isinstance(payload, dict) else {}
 
 
 def coverage_met(level: int, rows: list) -> bool:
@@ -77,7 +93,11 @@ def window_health(rows: list) -> dict:
 def assess_gate(store, run_id: str, *, held_out_latest: float, held_out_baseline: float) -> dict:
     run = store.get_run(run_id)
     level = int(run["curriculum_level"])
-    rows = [row for row in _annotated(store, run_id, level) if not row["held_out"]]
+    rows = [
+        row
+        for row in _annotated(store, run_id, level)
+        if not row["held_out"] and not is_review(row)
+    ]
     violations = sum(1 for row in rows if row["violation"])
     evaluated = [row for row in rows if row["evaluated"]]
     windows = []

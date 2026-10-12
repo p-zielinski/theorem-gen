@@ -119,6 +119,20 @@ def select_training_rows(store, run_id: str, *, cap: int = DESCENDANT_CAP) -> li
     return _balance(kept)
 
 
+def _practice_level(row) -> int:
+    """Earlier level named on a review row, otherwise the row's own level."""
+    raw = row["provenance"]
+    try:
+        payload = json.loads(raw) if raw else {}
+    except (TypeError, json.JSONDecodeError):
+        payload = {}
+    if isinstance(payload, dict) and payload.get("review") is True:
+        source = payload.get("source_level")
+        if isinstance(source, int) and not isinstance(source, bool):
+            return source
+    return int(row["curriculum_level"])
+
+
 def _difficulty_band(ast_size: int) -> str:
     if ast_size <= 2:
         return "small"
@@ -131,7 +145,10 @@ def _balance(rows: list) -> list:
     buckets = {}
     for row in rows:
         band = _difficulty_band(int(row["ast_size"]))
-        buckets.setdefault((row["family"], row["current_status"], band), []).append(row)
+        buckets.setdefault(
+            (_practice_level(row), row["family"], row["current_status"], band),
+            [],
+        ).append(row)
     ordered = []
     keys = sorted(buckets)
     while any(buckets.values()):

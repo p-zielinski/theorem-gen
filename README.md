@@ -1,16 +1,82 @@
 # Theorem Gen
 
-Deterministyczny generator twierdzeń w Lean 4. Python buduje typowane AST
-i eksportuje wąski podzbiór Lean; Lean sprawdza dowody. Etapy 0–8 są
-zaimplementowane. Domyślne CLI nadal tworzy konkretne twierdzenia o `Nat`.
+An experiment: can a language model keep going without a fixed corpus, reading only the sentences Lean 4 has accepted, and from some point adding its own? Lean stays the only judge. What Lean accepts goes back into training. What it rejects never enters the weights.
 
-## Wymagania
+The generator is the road those first sentences come from. Python builds a typed tree, Lean checks the proof, and the transformer reads only what became `proved`. From then on the subject of a run is the model.
 
-- Python 3.9+
-- Lean 4.34.1 i Lake 5.0.0 przez elan
+The hypothesis is easy to fail. Loss can stall. The model can repeat the generator, or write equations Lean will not accept. A falling loss is not development by itself. `learning: yes` appears only when a saved champion beats a fixed held-out set on a metric other than a placeholder. The loop is built so that result, or its absence, can be read without guessing what the speed of the machine changed.
 
-Repozytorium przypina wersję w `lean/lean-toolchain`. Jeżeli `elan` nie jest
-zainstalowany, można utworzyć toolchain lokalny, bez zmiany `PATH` użytkownika:
+## The loop
+
+`python3 -m theorem_gen.learn` stores candidates in SQLite and asks Lean 4.34.1 for a verdict. `proved` and `refuted` come only from a Lean validation. The generator keeps adding batches, including one equality with variables (`generator: richgen`: rearranging sums and products, distributivity, a proof of a few `rw` steps and `ac_rfl`). From level 2 every batch also adds a review of an earlier level. Lean checks that review and it stays in the corpus, but it does not count toward the promotion gate.
+
+The process is linear, the same process you would get with no queue. A batch, Lean's verdict, training on the accepted sentences, and a possible turn of the model follow the row numbers in the database. The queue only lets several Lean checks run ahead of the cursor. A faster machine waits less. It does not skip a sentence that still has no verdict, and it does not cut a training step out of whatever happened to return first.
+
+The cursor stands on the first sentence without a verdict. A rejected sentence, a badly formed one, or one that is too long for the window is already decided, so the cursor passes it. A `proved` sentence outside the held-out set enters training. A training step is four such sentences in a row. If an open check stands before those four are closed, the shorter piece waits with it and is not its own step. A shorter step happens only when no sentence is left ahead.
+
+The limit of 128 is the depth of that lookahead, separately for each side. The generator may have 128 unfinished Lean checks, and the model may have 128 of its own. A full generator lane does not close the model's room, and a full model lane does not close the generator's. Other kinds of work (a new batch, roles, a counterexample) each have their own 128. Inside one list, higher priority goes first.
+
+The model writes an equation of its own when 10 training steps in a row have loss under 0.45. It then puts 10 equations into its Lean lane and returns to study for 200 steps. After that, if loss is under 0.45 again, it may start another ten. A repeat of text already in the database does not spend a place in those ten. Eight weak tries in a row (a repeat, a badly formed sentence, no proof, a refutation) stop the writing and send the model through the corpus again. A full 128 in the model's lane also holds the writing, without spending the turn. The generator keeps going: it is still the source of sentences the model can study.
+
+The transformer has about 50 million parameters and a window of 512 tokens, counting the `<|propose|>` or `<|prove|>` mark and `<|end|>`. It trains from scratch on the closed prefix of `proved` sentences. Beside the weights, the run stores Adam's two moment buffers, so a later resume keeps the same step size. The weights are written every 20 training steps. The moment buffers, about 400 MB, are written every 500 steps and when the process stops. A checkpoint written before that file existed still starts Adam fresh once. A sentence that does not fit gets the database status `blocked by context limit` and waits until the window can hold it. It does not enter the weights as a cut-off piece. The mechanics are in `docs/continuous-ai-architecture.md`.
+
+From the repository root:
+
+```sh
+export ELAN_HOME="$PWD/.toolchains/elan"
+export PATH="$ELAN_HOME/bin:$PATH"
+
+python3 -m theorem_gen.learn start --run-id run-1 --until-pause --lm
+```
+
+Defaults: database `var/learn.sqlite` (the `var/` directory is in `.gitignore`), curriculum 1, seed 1, four theorems per batch, Lean timeout 60 s, checkpoint every 300 s. `--until-pause` removes the limit of 50 steps. The process runs until SIGINT or SIGTERM. Lean checks run in two processes (`--lean-workers`, default 2). One process stays the only SQLite writer. `--lm` turns the transformer on. Provenance shows whether a sentence was written by `generator` or `model`. Model progress:
+
+```sql
+SELECT step, epoch, cursor_id, last_loss, hold, weak_streak
+FROM lm_state WHERE run_id='run-1';
+```
+
+`hold = 1` means the model has stopped writing for a while and is reading the corpus again. A rising `step` does not set `learning: yes`.
+
+Effort in this fragment is a level from 1 to 4: proof method together with `ast_size` and `depth`. The size of a numeral in the formula is not difficulty. `decide` on a small tree is 1, ordinary `rfl` is 2, a larger tree or `lemma` is 3, `rewrite` or a tree from `ast_size` 12 is 4. Model rows without an AST get no level. From migration 008, new Lean checks store `lean_ms`: under 0.1 s, 0.1–0.5 s, 0.5–2 s, above 2 s. Older validations have no time.
+
+A read-only view of the run, not a second writer:
+
+```sh
+python3 -m theorem_gen.learn dashboard --run-id run-1
+```
+
+The page is in English at `http://127.0.0.1:8765/`. The numbers stay in fixed places and refresh every 5 seconds: the generator's Lean lane and the model's, pace over the last 10 minutes, proof shape (columns `decide` / `rfl` / `lemma` / `rewrite`, separate from curriculum lessons 1–7), Lean time, and model attempts compared across the last 10 minutes and the 10 minutes before that. An epoch is one full pass over the closed prefix. "Still to read" counts `proved` sentences the cursor can reach without skipping an open check. "Time to finish this read" is a clock for that prefix, not a condition for writing. "Model may write" shows how many recent steps in a row have loss under 0.45 (for example 3/10). Yes is only during a turn of 10 equations, Studying during the next 200 study steps, Waiting when the model's Lean lane is full, No after eight weak tries. "Waiting on the window" is sentences too long for 512 tokens. Loss is how surprised the model is by the next word. Lower is closer to the writing threshold, which still does not mean the model is developing.
+
+Database state, including while the loop is running:
+
+```sh
+python3 -m theorem_gen.learn status --run-id run-1
+```
+
+Stop a live process with Ctrl-C or `kill -TERM` on its PID. The signal does not cut Lean calls that have already started: the loop finishes the current group (each one at most `--timeout`), applies pending weight steps, releases leases, writes the pause checkpoint, and exits 0. Do not start a second `start` or `resume` on the same database while the first process is alive.
+
+Continue the same run:
+
+```sh
+python3 -m theorem_gen.learn resume --run-id run-1 --lm
+```
+
+A run started with `--until-pause` resumes until the next signal. An explicit `--max-steps` on `resume` limits only that resume. Jobs left in the queue are finished; new batches arrive when there is room. `SIGKILL` does not write a pause checkpoint. `resume` then returns to the last known checkpoint (start, or the 300 s interval) and takes over orphaned leases.
+
+Replay from the start checkpoint, on a separate database `var/learn-replay.sqlite`:
+
+```sh
+python3 -m theorem_gen.learn replay --run-id run-1 --from-checkpoint 1
+```
+
+That repeats a recorded run. It does not continue one. Continuing the live database is `resume`.
+
+## Generator
+
+A separate road, with no loop database. Stages 0–8 are implemented. The default CLI builds concrete theorems about `Nat` and can ask Lean to check the file. That file is not the model's corpus.
+
+Python 3.9+. Lean 4.34.1 and Lake 5.0.0 through elan. The repository pins the version in `lean/lean-toolchain`. If `elan` is not installed, a local toolchain can be created without changing the user's `PATH`:
 
 ```sh
 export ELAN_HOME="$PWD/.toolchains/elan"
@@ -22,9 +88,7 @@ curl https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh -sSf 
 export PATH="$ELAN_HOME/bin:$PATH"
 ```
 
-## Generowanie i weryfikacja
-
-Z katalogu repozytorium:
+From the repository root:
 
 ```sh
 export ELAN_HOME="$PWD/.toolchains/elan"
@@ -38,16 +102,34 @@ python3 -m theorem_gen generate \
   --timeout 120
 ```
 
-Oczekiwany koniec:
+Expected ending:
 
 ```text
 verification: proved
 Lean accepted the file with exit code 0.
 ```
 
-Wynik znajduje się w `lean/TheoremGen/Generated.lean`.
+The result is in `lean/TheoremGen/Generated.lean`.
 
-## Testy
+The second generator, the same one the loop uses, prints equalities with variables:
+
+```sh
+python3 -m theorem_gen.richgen --seed 1 --count 4 --out /tmp/rich.lean
+```
+
+Besides the CLI there are general sentences (`generate_general`), the `double` definition, hypothesis assessment (`assess_hypothesis`), and exploration of four templates (`explore`). No proof, a counterexample, and no rule in the fragment are separate results.
+
+The word `proved` has three meanings. Keep them apart:
+
+| Where | Meaning |
+|-------|---------|
+| `VerificationReport.status` | Lean accepted the file |
+| `HypothesisAssessment.status` | a hypothesis after Lean or a counterexample |
+| `ExplorationResult.status` | a citation of a registered lemma |
+
+`ExplorationResult.status == "proved"` is not `claimed_true`. Export from `theorem_from_proved` stays `unverified` until Lean checks the file. `claimed_true(theorem)` requires `verification == "proved"` and a non-empty proof.
+
+## Tests
 
 ```sh
 export ELAN_HOME="$PWD/.toolchains/elan"
@@ -55,11 +137,9 @@ export PATH="$ELAN_HOME/bin:$PATH"
 python3 -m unittest discover -s tests -v
 ```
 
-Zestaw zawiera testy jednostkowe i prawdziwe wywołania Lean. Jeśli Lean nie
-jest dostępny, klasa integracyjna zostanie pominięta; nie jest to pełna
-weryfikacja etapu.
+The suite has unit tests and real Lean calls. If Lean is unavailable, the integration class is skipped.
 
-Pełny build projektu Lean:
+A full Lean project build:
 
 ```sh
 cd lean
@@ -69,71 +149,14 @@ lake clean
 lake build
 ```
 
-## Dokumentacja
+## Documentation
 
-- `docs/stage-0.md` — środowisko i decyzje techniczne
-- `docs/architecture.md` — moduły i kontrakt weryfikacji
-- `docs/stage-1.md` … `docs/stage-8.md` — raporty etapów
-- `docs/stages.md` — kryteria ukończenia
-- `docs/prompts/audit-lean-generator.md` — prompt niezależnego audytu etapów 0–8
-- `docs/prompts/build-continuous-lean-ai.md` — prompt ciągłego AI + SQLite + Lean
-- `docs/continuous-ai-architecture.md` — pętla `theorem_gen.learn` (pamięć eksperymentu, nie wytrenowany model)
-- `docs/continuous-ai-schema.sql` — schemat SQLite
-- `docs/continuous-ai-report.md` — polecenia faktycznie uruchomione w tej dostawie
-
-Poza CLI dostępne są zdania ogólne (`generate_general`), definicja `double`,
-ocena hipotez (`assess_hypothesis`) i eksploracja czterech szablonów
-(`explore`). Brak dowodu, kontrprzykład i brak reguły we fragmencie to osobne
-wyniki.
-
-Słowo `proved` ma trzy różne znaczenia — nie wolno ich mieszać:
-
-| Gdzie | Znaczenie |
-|-------|-----------|
-| `VerificationReport.status` | Lean zaakceptował plik |
-| `HypothesisAssessment.status` | ocena hipotezy po Lean / kontrprzykładzie |
-| `ExplorationResult.status` | cytowanie zarejestrowanego lematu |
-
-`ExplorationResult.status == "proved"` **nie** jest `claimed_true`. Eksport z
-`theorem_from_proved` zostaje `unverified`, dopóki Lean nie sprawdzi pliku.
-`claimed_true(theorem)` wymaga `verification == "proved"` **oraz** niepustego
-dowodu.
-
-## Pętla ciągła
-
-`python3 -m theorem_gen.learn` zapisuje kandydatów w SQLite i prosi Leana 4.34.1 o werdykt. Status `proved` albo `refuted` bierze się wyłącznie z walidacji Leana. Domyślny generator `python3 -m theorem_gen generate` działa osobno i nie czyta tej bazy. Ten bieg nie ładuje wag modelu. `learning: yes` pojawia się dopiero wtedy, gdy zapisany champion pobije baseline na stałym zbiorze held-out. Szczegóły: `docs/continuous-ai-architecture.md`.
-
-Z katalogu repozytorium, ta sama zmienna `ELAN_HOME` co przy generowaniu:
-
-```sh
-export ELAN_HOME="$PWD/.toolchains/elan"
-export PATH="$ELAN_HOME/bin:$PATH"
-
-python3 -m theorem_gen.learn start --run-id run-1 --until-pause
-```
-
-Domyślnie: baza `var/learn.sqlite` (katalog `var/` jest w `.gitignore`), curriculum 1, ziarno 1, cztery twierdzenia w partii, timeout Leana 60 s, checkpoint co 300 s. `--until-pause` zdejmuje limit 50 kroków. Proces pracuje, aż dostanie SIGINT albo SIGTERM.
-
-Stan bazy, także gdy pętla trwa:
-
-```sh
-python3 -m theorem_gen.learn status --run-id run-1
-```
-
-Zatrzymanie żywego procesu to Ctrl-C albo `kill -TERM` na jego PID. Sygnał nie ucina wywołania Leana w połowie: pętla kończy bieżący krok (najwyżej tyle, ile wynosi `--timeout`), zwalnia dzierżawy, zapisuje checkpoint pauzy i kończy się kodem 0. Drugiego `start` albo `resume` na tej samej bazie nie wolno odpalać, dopóki pierwszy proces żyje.
-
-Kontynuacja tego samego biegu:
-
-```sh
-python3 -m theorem_gen.learn resume --run-id run-1
-```
-
-Bieg założony z `--until-pause` wznawia się znowu do następnego sygnału. Jawne `--max-steps` na `resume` ogranicza tylko to wznowienie. Prace zostawione w kolejce są dokańczane; nowe partie dochodzą, gdy kolejka jest pusta. `SIGKILL` nie pisze checkpointu pauzy. `resume` wraca wtedy do ostatniego znanego checkpointu (start albo interwał 300 s) i przejmuje osierocone dzierżawy.
-
-Odtworzenie od checkpointu startu, na osobnej bazie `var/learn-replay.sqlite`:
-
-```sh
-python3 -m theorem_gen.learn replay --run-id run-1 --from-checkpoint 1
-```
-
-To powtórzenie zapisanego biegu, nie kontynuacja. Kontynuacja żywej bazy to `resume`.
+- `docs/continuous-ai-architecture.md` — the loop, statuses, gates, queue, model
+- `docs/continuous-ai-schema.sql` — the SQLite schema
+- `docs/continuous-ai-report.md` — commands actually run for that delivery
+- `docs/prompts/build-continuous-lean-ai.md` — prompt for the continuous loop
+- `docs/stage-0.md` — environment and technical decisions for the generator
+- `docs/architecture.md` — modules and the verification contract
+- `docs/stage-1.md` … `docs/stage-8.md` — generator stage reports
+- `docs/stages.md` — completion criteria for stages 0–8
+- `docs/prompts/audit-lean-generator.md` — prompt for an independent audit of stages 0–8

@@ -1,53 +1,52 @@
-# Prompt: niezależny audyt generatora Lean 4 (etapy 0–8)
+# Prompt: independent audit of the Lean 4 generator (stages 0–8)
 
-Skopiuj cały blok poniżej (od `Jesteś niezależnym…` do końca bloku) jako pełne polecenie dla agenta lub modelu. Nie ufaj statusom „ukończony” w dokumentacji — wymagaj dowodów z kodu, testów i rzeczywistego Leana.
+Copy the whole block below (from `You are an independent…` through the end of the block) as the full instruction for an agent or a model. Do not trust "done" statuses in the documentation — require evidence from the code, the tests, and real Lean.
 
-Uwaga dla autorów Markdown: blok jest w fence `text` czterema backtickami, żeby wewnętrzne przykłady poleceń nie ucinały copy-paste.
+Note for Markdown authors: the block is in a `text` fence of four backticks, so inner command examples do not cut copy-paste.
 
 ````text
-Jesteś niezależnym audytorem inżynierii oprogramowania i formalnej weryfikacji.
-Przeprowadź audyt projektu w bieżącym katalogu repozytorium (root z plikami
-docs/, theorem_gen/, tests/, lean/). Nie zakładaj absolutnej ścieżki użytkownika.
+You are an independent auditor of software engineering and formal verification.
+Audit the project in the current repository directory (the root with
+docs/, theorem_gen/, tests/, lean/). Do not assume an absolute user path.
 
-Cel: sprawdzić, czy etapy 0–8 generatora twierdzeń Lean 4 są faktycznie
-zaimplementowane, przetestowane i działają zgodnie z kryteriami w docs/stages.md.
+Goal: check whether stages 0–8 of the Lean 4 theorem generator are actually
+implemented, tested, and behaving according to the criteria in docs/stages.md.
 
-Zakres: TYLKO audyt. Nie implementuj nowych funkcji i nie „naprawiaj po drodze”.
-Jeśli coś jest zepsute: oznacz etap not_met lub incomplete_without_lean i wypisz
-poprawki P0/P1/P2. Nie zmieniaj kodu w ramach tego promptu.
+Scope: AUDIT ONLY. Do not implement new features and do not "fix along the way".
+If something is broken: mark the stage not_met or incomplete_without_lean and list
+fixes P0/P1/P2. Do not change code as part of this prompt.
 
-## Zasady audytu
+## Audit rules
 
-1. Status „ukończony” w docs/stages.md, docs/stage-*.md lub .cursor/work/* NIE jest dowodem.
-2. Dla każdego etapu zbuduj obowiązkową mapę:
-   kryterium → ścieżka kodu / API → test → Lean (lub N/A) → wynik uruchomienia.
-   Lean=N/A tylko gdy etap nie wymaga Leana (np. 0, 4). Skip LeanIntegrationTests
-   z braku lake = incomplete, nie „met”.
-3. Audyt jest niekompletny, jeśli testy LeanIntegrationTests zostały pominięte
-   z braku lake/lean.
-4. Timeout, unavailable i brak dowodu NIE są fałszem.
-5. Trzy różne słowa „proved” nie wolno mieszać:
-   - VerificationReport.status (Lean zaakceptował plik)
-   - HypothesisAssessment.status (ocena hipotezy)
-   - ExplorationResult.status (cytowanie lematu w eksploracji; nie jest jeszcze claimed_true)
-6. claimed_true(theorem) jest prawdziwe tylko gdy verification == "proved" ORAZ proof is not None.
-7. Nie traktuj wygenerowania zdania jako prawdy matematycznej.
-8. Złoty plik lean/TheoremGen/Generated.lean dla seed=1, count=8 musi pozostać zgodny z generate().
-9. Domyślny CLI (python3 -m theorem_gen generate) ćwiczy tylko generator konkretny etapu 1.
-10. Mathlib jest poza zakresem. Nie dodawaj zależności Pythona.
-11. Zwróć werdykt per etap: met | met_with_limitations | not_met | incomplete_without_lean,
-    z dowodami i listą poprawek.
+1. A "done" status in docs/stages.md, docs/stage-*.md, or .cursor/work/* is NOT evidence.
+2. For each stage build a required map:
+   criterion → code path / API → test → Lean (or N/A) → run result.
+   Lean=N/A only when the stage does not require Lean (for example 0, 4). Skipping
+   LeanIntegrationTests for lack of lake = incomplete, not "met".
+3. The audit is incomplete if LeanIntegrationTests were skipped for lack of lake/lean.
+4. Timeout, unavailable, and lack of a proof are NOT falsehood.
+5. Three different words "proved" must not be mixed:
+   - VerificationReport.status (Lean accepted the file)
+   - HypothesisAssessment.status (hypothesis assessment)
+   - ExplorationResult.status (a lemma citation in exploration; not yet claimed_true)
+6. claimed_true(theorem) is true only when verification == "proved" AND proof is not None.
+7. Do not treat generating a sentence as mathematical truth.
+8. The golden file lean/TheoremGen/Generated.lean for seed=1, count=8 must stay in agreement with generate().
+9. The default CLI (python3 -m theorem_gen generate) exercises only the stage 1 concrete generator.
+10. Mathlib is out of scope. Do not add Python dependencies.
+11. Return a verdict per stage: met | met_with_limitations | not_met | incomplete_without_lean,
+    with evidence and a list of fixes.
 
-## Środowisko i polecenia obowiązkowe
+## Environment and required commands
 
-Z katalogu root repozytorium:
+From the repository root:
 
     export ELAN_HOME="$PWD/.toolchains/elan"
     export PATH="$ELAN_HOME/bin:$PATH"
 
-    # Wymagane: Lean 4.34.1 i Lake (patrz lean/lean-toolchain i README.md).
-    # Jeśli toolchainu brakuje — zainstaluj lokalnie według README, bez zmiany PATH użytkownika.
-    # Bez lake audyt etapów Lean jest NIEKOMPLETNY.
+    # Required: Lean 4.34.1 and Lake (see lean/lean-toolchain and README.md).
+    # If the toolchain is missing — install it locally as in the README, without changing the user's PATH.
+    # Without lake, an audit of the Lean stages is INCOMPLETE.
 
     python3 -m unittest discover -s tests -v
     python3 -m theorem_gen generate \
@@ -59,9 +58,9 @@ Z katalogu root repozytorium:
     python3 -m compileall -q theorem_gen tests
     git diff --check
 
-Oczekiwane (pełny audyt z Leanem): 134 testów OK; CLI: verification: proved.
+Expected (a full audit with Lean): 134 tests OK; CLI: verification: proved.
 
-Dodatkowo:
+Also:
 
     (cd lean && lake build)
     python3 -c "
@@ -79,138 +78,138 @@ Dodatkowo:
     print(src == Path('lean/TheoremGen/Generated.lean').read_text(encoding='utf-8'))
     "
 
-Opcjonalne szybsze wycinki:
+Optional faster slices:
 
     python3 -m unittest tests.test_expr tests.test_rng tests.test_generate tests.test_export tests.test_verify tests.test_cli -v
     python3 -m unittest tests.test_stage2 tests.test_stage3 tests.test_stage4 tests.test_stage5 tests.test_stage6 tests.test_stage7 tests.test_stage8 -v
     python3 -m unittest tests.test_lean_integration -v
 
-## Mapa etapów — co musisz sprawdzić
+## Stage map — what you must check
 
-### Etap 0 — analiza
-Źródła: docs/stage-0.md, docs/architecture.md, docs/stages.md, lean/lean-toolchain.
-Sprawdź:
-- Python generuje AST/eksport/proces; Lean jest jedynym sędzią dowodu; brak parsera Leana w Pythonie.
-- Pin toolchainu leanprover/lean4:v4.34.1.
-- Kontrakt statusów w theorem_gen/verify.py: proved|failed|timeout|unavailable oraz failure_class.
-- Tabela modułów w architecture.md odpowiada plikom w theorem_gen/.
+### Stage 0 — analysis
+Sources: docs/stage-0.md, docs/architecture.md, docs/stages.md, lean/lean-toolchain.
+Check:
+- Python generates the AST/export/process; Lean is the only judge of a proof; there is no Lean parser in Python.
+- Toolchain pin leanprover/lean4:v4.34.1.
+- The status contract in theorem_gen/verify.py: proved|failed|timeout|unavailable and failure_class.
+- The module table in architecture.md matches the files in theorem_gen/.
 
-### Etap 1 — konkretna arytmetyka
-Kod: theorem_gen/{rng,expr,config,theorem,generate,export_lean,verify,__main__}.py
-Testy: tests/test_{rng,expr,generate,export,verify,cli,lean_integration}.py
-Sprawdź:
-- determinizm generate(GeneratorConfig)
+### Stage 1 — concrete arithmetic
+Code: theorem_gen/{rng,expr,config,theorem,generate,export_lean,verify,__main__}.py
+Tests: tests/test_{rng,expr,generate,export,verify,cli,lean_integration}.py
+Check:
+- determinism of generate(GeneratorConfig)
 - count=0 → []
-- unique i GenerationError z tekstem „not a mathematical verdict”
-- DEFAULT_RULES (12 reguł); reguły ogólne odrzucane jako „not a concrete rule”
-- identyfikatory gen_s{seed}_{index}, ujemny seed → token neg
-- eksport nie zmienia znaczenia; rfl/decide nie są podmieniane
-- sorry przy exit 0 nie jest proved; timeout/sygnał nie jest false
-- złoty plik Generated.lean; CLI --verify; lake build
+- unique and GenerationError with the text "not a mathematical verdict"
+- DEFAULT_RULES (12 rules); general rules rejected as "not a concrete rule"
+- identifiers gen_s{seed}_{index}, a negative seed → token neg
+- export does not change meaning; rfl/decide are not swapped
+- sorry at exit 0 is not proved; timeout/signal is not false
+- golden file Generated.lean; CLI --verify; lake build
 
-### Etap 2 — zmienne i twierdzenia ogólne
-Kod: theorem_gen/general.py, export_lean.py, theorem.py
-Testy: tests/test_stage2.py, test_lean_integration.py
-Sprawdź:
-- rodzaje: concrete / universal / conditional / expression
+### Stage 2 — variables and general theorems
+Code: theorem_gen/general.py, export_lean.py, theorem.py
+Tests: tests/test_stage2.py, test_lean_integration.py
+Check:
+- kinds: concrete / universal / conditional / expression
 - rules=None: generate → DEFAULT_RULES; generate_general → GENERAL_RULES
-- eksport ogólny przez config_for_export
-- expression: #check, brak :=, claimed_true False, verify_theorems nie oznacza proved bez proof
-- Lean akceptuje każdy schemat z dowodem (bez open_double_eq)
+- general export through config_for_export
+- expression: #check, no :=, claimed_true False, verify_theorems does not mark proved without a proof
+- Lean accepts every schema that has a proof (except open_double_eq)
 
-### Etap 3 — szersze AST
-Kod: theorem_gen/expr.py, export_lean.py
-Testy: tests/test_stage3.py, test_lean_integration.py
-Sprawdź:
+### Stage 3 — a wider AST
+Code: theorem_gen/expr.py, export_lean.py
+Tests: tests/test_stage3.py, test_lean_integration.py
+Check:
 - IntLit, Var, UnaryOp(succ|neg), Const, Atom, Implies, Forall
-- TypingError dla Nat+Int, neg Nat, succ Int, pred, złych argumentów Const/Atom, unbound/duplicate binders
-- Lean: succ, Int decide/neg; undeclared atom → failed
-- generator konkretny nadal nie losuje tych konstrukcji w DEFAULT_RULES
+- TypingError for Nat+Int, neg Nat, succ Int, pred, bad Const/Atom arguments, unbound/duplicate binders
+- Lean: succ, Int decide/neg; an undeclared atom → failed
+- the concrete generator still does not draw these constructions in DEFAULT_RULES
 
-### Etap 4 — rejestr i zależności
-Kod: theorem_gen/registry.py, definitions.py
-Testy: tests/test_stage4.py
-Sprawdź:
-- stable_identifier, missing deps, cycles (self i mutual), duplicate id
-- zależność w tej samej partii extend
-- Registry.replay(history) odtwarza graf
+### Stage 4 — registry and dependencies
+Code: theorem_gen/registry.py, definitions.py
+Tests: tests/test_stage4.py
+Check:
+- stable_identifier, missing deps, cycles (self and mutual), duplicate id
+- a dependency in the same extend batch
+- Registry.replay(history) rebuilds the graph
 - citation/use_definition → discovered=False; define → discovered=True
-- Lean=N/A dla samego rejestru (in-memory)
+- Lean=N/A for the registry itself (in-memory)
 
-### Etap 5 — złożoność
-Kod: theorem_gen/complexity.py, config.py, generate.py, general.py
-Testy: tests/test_stage5.py
-Sprawdź sześć miar: ast_size, depth, variables, operators, dependencies, definitions.
-- NatLit(1) i NatLit(10**12) mają ten sam rozmiar/głębokość
-- granice filtrują generate i generate_general
-- use_definition + dependencies/definitions wybiera double
-- explore() NIE czyta complexity_bounds
-- niemożliwe granice → GenerationError, nie werdykt matematyczny
+### Stage 5 — complexity
+Code: theorem_gen/complexity.py, config.py, generate.py, general.py
+Tests: tests/test_stage5.py
+Check six measures: ast_size, depth, variables, operators, dependencies, definitions.
+- NatLit(1) and NatLit(10**12) have the same size/depth
+- bounds filter generate and generate_general
+- use_definition + dependencies/definitions selects double
+- explore() does NOT read complexity_bounds
+- impossible bounds → GenerationError, not a mathematical verdict
 
-### Etap 6 — definicje
-Kod: theorem_gen/definitions.py, export_lean.export_library
-Testy: tests/test_stage6.py, test_lean_integration.py
-Sprawdź validate_definition, double, theorem_about_double, supporting_definitions,
-odrzucenie free var / type mismatch / recursion / duplicate param,
+### Stage 6 — definitions
+Code: theorem_gen/definitions.py, export_lean.export_library
+Tests: tests/test_stage6.py, test_lean_integration.py
+Check validate_definition, double, theorem_about_double, supporting_definitions,
+rejection of a free var / type mismatch / recursion / duplicate param,
 Lean: def double + gen_double_zero := rfl → proved.
 
-### Etap 7 — hipotezy
-Kod: theorem_gen/hypothesis.py
-Testy: tests/test_stage7.py, test_verify.py, test_lean_integration.py
-Sprawdź statusy: proved, refuted, unresolved, invalid_syntax, invalid_type.
-- kontrprzykład przed zadeklarowanym „proved”
-- skończone przeszukanie Nat; brak świadka ≠ prawda
-- timeout nie rozstrzyga prawdziwego zdania
-- decide „proved that the proposition … is false” → failure_class proof
-- limit_repetition i diversity_metrics
+### Stage 7 — hypotheses
+Code: theorem_gen/hypothesis.py
+Tests: tests/test_stage7.py, test_verify.py, test_lean_integration.py
+Check statuses: proved, refuted, unresolved, invalid_syntax, invalid_type.
+- a counterexample before a declared "proved"
+- a finite Nat search; no witness ≠ truth
+- a timeout does not decide a true sentence
+- decide "proved that the proposition … is false" → failure_class proof
+- limit_repetition and diversity_metrics
 
-### Etap 8 — otwarta eksploracja
-Kod: theorem_gen/explore.py
-Testy: tests/test_stage8.py, test_lean_integration.py
-Sprawdź explore(seed, count):
-- statusy: proved (cytowanie), refuted, no_proof, unprovable_in_fragment
-- seed 1, count 4 obejmuje wszystkie cztery; no_proof ≠ refuted
-- theorem_from_proved zostaje unverified do czasu Leana
-- Lean akceptuje cytowanie Nat.add_zero
+### Stage 8 — open exploration
+Code: theorem_gen/explore.py
+Tests: tests/test_stage8.py, test_lean_integration.py
+Check explore(seed, count):
+- statuses: proved (citation), refuted, no_proof, unprovable_in_fragment
+- seed 1, count 4 covers all four; no_proof ≠ refuted
+- theorem_from_proved stays unverified until Lean
+- Lean accepts a citation of Nat.add_zero
 
-## Inwarianty do grepa / ręcznego sprawdzenia
+## Invariants to grep / check by hand
 
-- Jedyny zapis składni Lean: theorem_gen/export_lean.py (brak drugiego string-buildera Lean).
-- GenerationError zawiera „not a mathematical verdict” przy limitach generowania.
-- Komunikaty timeout nie zawierają „false” / „rejected” jako werdyktu.
-- discovered=False dla cite / use_definition.
-- Brak słowa sorry w poprawnych eksportach generatora.
-- Dualne pętle generate.py vs general.py: porównaj unique, max_attempts, complexity.
-- Dualne _within_complexity: concrete vs general — obie ścieżki muszą mieć testy.
+- The only writer of Lean syntax: theorem_gen/export_lean.py (no second Lean string-builder).
+- GenerationError contains "not a mathematical verdict" at generation limits.
+- Timeout messages do not contain "false" / "rejected" as a verdict.
+- discovered=False for cite / use_definition.
+- No word sorry in correct generator exports.
+- Dual loops generate.py vs general.py: compare unique, max_attempts, complexity.
+- Dual _within_complexity: concrete vs general — both paths must have tests.
 
-## Format raportu audytu
+## Audit report format
 
-Dla każdego etapu 0–8:
+For each stage 0–8:
 
-### Etap N — <nazwa>
-- Werdykt: met | met_with_limitations | not_met | incomplete_without_lean
-- Mapa (obowiązkowa tabela; Lean=N/A tylko gdy etap nie wymaga Leana, np. 0/4):
+### Stage N — <name>
+- Verdict: met | met_with_limitations | not_met | incomplete_without_lean
+- Map (required table; Lean=N/A only when the stage does not require Lean, for example 0/4):
 
-| Kryterium (docs/stages.md) | Kod / API | Test | Lean (polecenie lub N/A) | Wynik |
-|----------------------------|-----------|------|--------------------------|-------|
+| Criterion (docs/stages.md) | Code / API | Test | Lean (command or N/A) | Result |
+|----------------------------|------------|------|-----------------------|--------|
 | … | … | … | … | pass/fail/skip→incomplete |
 
-- Ograniczenia (jeśli met_with_limitations): …
-- Luki / ryzyka: …
-- Wymagane poprawki (jeśli not_met): priorytet P0/P1/P2
+- Limits (if met_with_limitations): …
+- Gaps / risks: …
+- Required fixes (if not_met): priority P0/P1/P2
 
-Na końcu:
-1. Tabela zbiorcza etapów
-2. Wynik poleceń (liczba testów, CLI verify, lake build)
-3. Top 10 ryzyk (np. pominięte Lean tests, przeciążenie „proved”, CLI tylko stage-1)
-4. Rekomendacja: accept / accept with caveats / reject / incomplete_without_lean
+At the end:
+1. A summary table of the stages
+2. Command results (test count, CLI verify, lake build)
+3. Top 10 risks (for example skipped Lean tests, overloaded "proved", CLI only stage-1)
+4. Recommendation: accept / accept with caveats / reject / incomplete_without_lean
 
-Nie kończ audytu werdyktem accept, dopóki nie uruchomisz pełnego unittest z dostępem
-do lake albo jawnie oznaczysz audyt jako incomplete_without_lean.
+Do not end the audit with a verdict of accept until you have run the full unittest
+with lake available, or you have explicitly marked the audit incomplete_without_lean.
 ````
 
-## Jak używać
+## How to use
 
-1. Wklej cały blok `text` powyżej do nowego czatu / agenta z dostępem do repozytorium.
-2. Wymagaj pełnego toolchainu Lean przed werdyktem „met” / „accept”.
-3. Zachowaj wynik audytu jako osobny raport (np. `docs/audits/YYYY-MM-DD.md`), jeśli chcesz historię.
+1. Paste the whole `text` block above into a new chat / agent with access to the repository.
+2. Require a full Lean toolchain before a verdict of "met" / "accept".
+3. Keep the audit result as a separate report (for example `docs/audits/YYYY-MM-DD.md`) if you want a history.
