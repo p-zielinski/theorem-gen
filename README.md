@@ -4,7 +4,7 @@ An experiment: can a language model keep going without a fixed corpus, reading o
 
 The generator is the road those first sentences come from. Python builds a typed tree, Lean checks the proof, and the transformer reads only what became `proved`. From then on the subject of a run is the model.
 
-The hypothesis is easy to fail. Loss can stall. The model can repeat the generator, or write equations Lean will not accept. A falling loss is not development by itself. `learning: yes` appears only when a saved champion beats a fixed held-out set on a metric other than a placeholder. The loop is built so that result, or its absence, can be read without guessing what the speed of the machine changed.
+The hypothesis is easy to fail. Loss can stall. The model can repeat the generator, or write equations Lean will not accept. A falling loss is not development by itself. What this run can show, and what it cannot, is `docs/what-the-run-can-show.md`. The readable results are the loss on proved sentences and, once the model writes, the equations Lean accepts and their syntactic shape. `learning: yes` is a separate gate. It turns on only when a saved champion other than the generator beats a fixed held-out set on a metric other than a placeholder. The 50M transformer does not enter that gate. The loop is built so that either result, or its absence, can be read without guessing what the speed of the machine changed.
 
 ## The loop
 
@@ -162,6 +162,7 @@ lake build
 
 ## Documentation
 
+- `docs/what-the-run-can-show.md` — what this run can and cannot show, and how long it is worth leaving on
 - `docs/continuous-ai-architecture.md` — the loop, statuses, gates, queue, model
 - `docs/continuous-ai-schema.sql` — the SQLite schema
 - `docs/continuous-ai-report.md` — commands actually run for that delivery
