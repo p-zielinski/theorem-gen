@@ -39,7 +39,7 @@ The current generator exhausted shallow concrete `Nat` (depth 2, `rfl`). Beside 
 
 ## Next steps
 
-1. The loss gate for model writing is implemented in the continuous loop: 10 losses under 0.45, then 10 equations, then 200 study steps. See `.cursor/work/continuous-lean-ai.md`.
+1. The loss gate for model writing is implemented in the continuous loop: 10 losses under 0.45, or a level curve, then a turn whose length follows the accepted share. A low share is 40 equations and 40 study steps. See `.cursor/work/continuous-lean-ai.md`.
 
 ## Blockers / open questions
 

@@ -46,7 +46,8 @@ def main(argv=None) -> int:
     sub.add_parser("memory")
 
     board = sub.add_parser("dashboard")
-    _db_args(board)
+    board.add_argument("--run-id", default=None)
+    board.add_argument("--db", type=Path, default=_DEFAULT_DB)
     board.add_argument("--port", type=int, default=8765)
 
     args = parser.parse_args(argv)
@@ -84,6 +85,8 @@ def _run_args(parser) -> None:
     parser.add_argument("--timeout", type=float, default=60.0)
     parser.add_argument("--lean-workers", type=int, default=None)
     parser.add_argument("--lm", action="store_true")
+    parser.add_argument("--probe", action="store_true")
+    parser.add_argument("--repair", action="store_true")
 
 
 def _db_args(parser) -> None:
@@ -108,6 +111,8 @@ def _start(store, args) -> int:
         refill_when_idle=True,
         lean_workers=_choose_workers(args),
         lm=bool(getattr(args, "lm", False)),
+        probe=bool(getattr(args, "probe", False) or getattr(args, "repair", False)),
+        repair=bool(getattr(args, "repair", False)),
     )
     with _signals(engine):
         engine.start()
@@ -200,6 +205,13 @@ def _engine_for_existing(store, args, *, max_steps, until_pause: bool = False, r
         refill_when_idle=refill_when_idle,
         lean_workers=_choose_workers(args),
         lm=bool(getattr(args, "lm", False)),
+        probe=bool(
+            getattr(args, "probe", False)
+            or getattr(args, "repair", False)
+            or config.get("probe")
+            or config.get("repair")
+        ),
+        repair=bool(getattr(args, "repair", False) or config.get("repair")),
     )
 
 

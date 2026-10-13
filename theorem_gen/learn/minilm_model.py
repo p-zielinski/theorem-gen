@@ -103,13 +103,17 @@ class Trainer:
         mx.eval(self.model.parameters(), self.optimizer.state, loss)
         return float(loss.item())
 
-    def complete(self, prompt: list, max_new: int = 96) -> list:
+    def complete(self, prompt: list, max_new: int = 96, temperature: float = 0.0, top_p: float = 1.0) -> list:
+        from theorem_gen.learn.probe import pick_token
+
         ids = list(prompt)
         for _ in range(max_new):
             window = ids[-self.config.context :]
             logits = self.model(mx.array([window], dtype=mx.int32))
             mx.eval(logits)
-            nxt = int(mx.argmax(logits[0, -1]).item())
+            scores = [float(item) for item in logits[0, -1].tolist()]
+            draw = 0.0 if temperature <= 0 else float(mx.random.uniform().item())
+            nxt = pick_token(scores, temperature, top_p, draw)
             ids.append(nxt)
             if nxt in {END, PAD}:
                 break

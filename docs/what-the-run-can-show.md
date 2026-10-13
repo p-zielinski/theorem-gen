@@ -1,7 +1,8 @@
 # What this run can show
 
 > Written 2026-10-12, while `run-1` was in progress.
-> This note is a reading of the loop as it is wired. It is not a result.
+> Paused 2026-10-13. The greedy decoder reached stop 2 below. The numbers are `docs/run-1-greedy-result.md`.
+> This note is a reading of the loop as it is wired. It is not replaced by that result.
 
 The experiment makes sense. It does not test the wide sentence in the first line of the README, "a model that keeps developing forever." It tests a much smaller machine, and a negative answer from that machine is still a result.
 
@@ -21,7 +22,7 @@ The readable outcomes are:
 flowchart TD
   subgraph inside [This run can move]
     loss[Loss on proved sentences]
-    gate[Ten losses in a row under 0.45]
+    gate[Ten losses under 0.45, or a level curve over 80]
     own[New equations the model wrote]
     lean[Lean accepts or rejects them]
     shape[Depth, operators, and nodes of the accepted ones]
@@ -54,25 +55,25 @@ Snapshot taken while the process was running, so the next minute changes the cou
 | Curriculum lesson | 7 |
 | Champion | `champion-generator-v0` |
 
-What the model has read is mostly `rfl`, then `lemma` and `decide`, and a few thousand `rewrite` proofs. What is still ahead, before the richer generator, is again mostly `rfl`. The `ac_rfl` proofs have not been read yet. Loss fell a long way on the easy prefix and then sat near 0.6. Sitting near 0.6 is not the same thing as being about to cross 0.45.
+What the model has read is mostly `rfl`, then `lemma` and `decide`, and a few thousand `rewrite` proofs. What is still ahead, before the richer generator, is again mostly `rfl`. The `ac_rfl` proofs have not been read yet. Loss fell a long way on the easy prefix and then sat near 0.6. Sitting near 0.6 is the entropy of fresh theorem names and numerals on this corpus. It is not a sign that the curve is about to cross 0.45.
 
 ## What a result can mean
 
-**Loss crosses 0.45 and stays under it for ten steps.** The writing gate opens. That says the network has become locally sure of the next token on the sentences it has just read. It does not say the network understands arithmetic. The gate is an operational rule. Cross-entropy can fall because the text is repetitive: a theorem header, `:= rfl`, small numerals.
+**Ten losses under 0.45, or a level curve.** The writing gate opens. Ten losses under 0.45 say the network has become locally sure of the next token on the sentences it has just read. The other door is a level curve: the last 80 training losses form two blocks of 40 whose means differ by at most 0.05, and the later mean is under 1. A flat curve near 0.6 uses that door. On this corpus a large part of that number is the fresh theorem name and the numerals, so 0.45 is not required. Either door starts a turn. Neither says the network understands arithmetic. The gate is an operational rule. Cross-entropy can fall because the text is repetitive: a theorem header, `:= rfl`, small numerals.
 
-**Loss stays near 0.6 after the cursor has read thousands of `richgen` proofs.** That is a result about this network on this corpus. The early drop did not continue into the richer proofs. It is not a result about every transformer, and it is not a refutation of "a model can keep improving" in the abstract. It is a reason to stop expecting this run to start writing soon.
+**Loss stays near 0.6 after the cursor has read thousands of `richgen` proofs.** That is a result about this network on this corpus. The early drop did not continue into the richer proofs. It is not a result about every transformer, and it is not a refutation of "a model can keep improving" in the abstract. From 2026-10-13 a curve that stays at that level opens a writing turn. The equations that follow are the next result.
 
 **The model writes, and Lean accepts new sentences.** The share of accepted equations, in blocks of 20, is the first number that matches the hope in the README. A block whose lower Wilson bound is above one half is the run's own idea of "clearly not a coin toss." Above three quarters is the run's idea of "clearly strong." Depth, operator count, and node count say whether those accepted sentences are bare `0 = 0` or nested expressions. A large numeral is not depth.
 
 **The model writes, and almost everything is a repeat or a rejection.** That is a negative result with a specific shape. The network learned the surface of the corpus well enough to emit it, and not well enough to leave it. Freedom then stays at the baseline, which is what an average block is supposed to do. The charts are the record. The freedom card is only the thermostat.
 
-**Accepted share rises, then falls.** The share chart is there so that pattern stays visible. One good block of 20 does not establish a trend. The freedom rule already treats the latest block as the whole decision and returns an average block to 10 equations and 200 study steps.
+**Accepted share rises, then falls.** The share chart is there so that pattern stays visible. One good block of 20 does not establish a trend. The freedom rule already treats the latest block as the whole decision and returns an average block to 40 equations and 40 study steps.
 
 ```mermaid
 flowchart TD
-  read[Read proved sentences] --> loss{Recent loss under 0.45?}
-  loss -->|no| read
-  loss -->|yes| write[Write a turn of equations]
+  read[Read proved sentences] --> loss{Ten under 0.45, or the curve level?}
+  loss -->|still moving| read
+  loss -->|under 0.45, or level| write[Write a turn of equations]
   write --> judge[Lean judges them]
   judge --> block{Latest block of 20}
   block -->|at or below one half| base[Baseline turn]
@@ -103,9 +104,9 @@ One seed, one width, one run. A single curve cannot separate "this hypothesis is
 
 Three stops, in order. Later ones are only informative if the earlier one happened.
 
-1. **Through the first rich proofs, and a few thousand steps after them.** About 22,500 proved sentences of the old generator are still unread before id 131,606. A training step reads four of them, so that prefix is on the order of 5,600 steps. At the recent pace of this process that is hours, not days, and new rows do not delay it: they are inserted after the rich proofs, not in front of the cursor. The thing to write down is the loss before that id and the loss after a few thousand rich sentences have been read. If the loss jumps and then comes back down, the jump was the change of corpus. If it jumps and sits there, say so, and do not wait for 0.45 out of habit.
+1. **Through the first rich proofs, and a few thousand steps after them.** About 22,500 proved sentences of the old generator are still unread before id 131,606. A training step reads four of them, so that prefix is on the order of 5,600 steps. At the recent pace of this process that is hours, not days, and new rows do not delay it: they are inserted after the rich proofs, not in front of the cursor. The thing to write down is the loss before that id and the loss after a few thousand rich sentences have been read. If the loss jumps and then comes back down, the jump was the change of corpus. If it jumps and sits there, say so. From 2026-10-13 a level curve opens a turn, so that sitting is no longer a reason to keep waiting for 0.45.
 
-2. **If the gate opens, until 200 judged equations.** That is ten blocks of 20. Two blocks only show that the rule can return to baseline. Ten blocks show whether the accepted share and the depth are drifting rather than flickering. One turn at the baseline is 10 equations and then 200 study steps, so 200 judged equations are many turns, not an afternoon, once Lean is checking new text instead of rejecting repeats. If the first ten blocks are almost all repeats and rejections, that negative result is complete enough to stop. If the share or the depth is still moving, keep the same run. Do not start a second one.
+2. **If the gate opens, until 200 judged equations.** That is ten blocks of 20. Two blocks only show that the rule can return to baseline. Ten blocks show whether the accepted share and the depth are drifting rather than flickering. One turn at the baseline is 40 equations and then 40 study steps, so 200 judged equations are five turns, not an afternoon, once Lean is checking new text instead of rejecting repeats. If the first ten blocks are almost all repeats and rejections, that negative result is complete enough to stop. If the share or the depth is still moving, keep the same run. Do not start a second one.
 
 3. **Do not run it in order to flip `learning: yes`.** This wiring cannot do that. Stopping because the flag is still `no` throws away the only results the run can produce.
 

@@ -1,11 +1,12 @@
 """Which queue may run. A low-loss burst may write, then study takes over.
 
 Freedom is the latest block of 20 judged equations, not a high-water mark.
-The baseline is 10 equations and 200 study steps. A block whose Wilson lower
-bound is above one half takes the wider turn. Above three quarters, the
-widest. A block that does not clear one half, including an average one,
-returns to the baseline at once. Clearly deep accepted equations can add one
-step on the wider turn. They do not hold a turn the share has given back.
+The baseline is 40 equations and 40 study steps. A block that does not clear
+one half, including an average one, stays there, so a model that is still
+missing gets many tries and a short gap. A Wilson lower bound above one half
+takes 80 equations and 20 study steps. Above three quarters, 160 and 10.
+Clearly deep accepted equations can add one step on the wider turn. They do
+not hold a turn the share has given back.
 """
 
 from __future__ import annotations
@@ -16,26 +17,58 @@ from typing import Optional
 WEAK_LIMIT = 8
 LOSS_LIMIT = 0.45
 LOSS_STREAK = 10
-SAMPLE_BURST = 10
-STUDY_STEPS = 200
+# Two adjacent blocks of forward-step losses. A level curve opens a turn
+# when ten losses under LOSS_LIMIT never arrive. Replay steps are not in this list.
+PLATEAU_WINDOW = 40
+PLATEAU_BAND = 0.05
+PLATEAU_CEILING = 1.0
+LOSS_HISTORY = PLATEAU_WINDOW * 2
+SAMPLE_BURST = 40
+STUDY_STEPS = 40
 BLOCK_SIZE = 20
 # Lower Wilson bound of the latest block. At or below one half is the baseline.
 STRONG_LOW = 0.5
 EXCELLENT_LOW = 0.75
-# Turn length, study steps, weak tries in a row.
+# Turn length, study steps, weak tries in a row. A low share still writes
+# as much as it studies. A higher share writes more and studies less.
 FREEDOM = (
-    (10, 200, 8),
-    (20, 100, 12),
-    (40, 50, 16),
+    (40, 40, 8),
+    (80, 20, 12),
+    (160, 10, 16),
 )
 
 
-def loss_is_ready(losses) -> bool:
-    """True when the last 10 training losses are all under 0.45."""
-    recent = list(losses)[-LOSS_STREAK:]
-    if len(recent) < LOSS_STREAK:
+def loss_is_level(losses) -> bool:
+    """True when the last 80 losses form two blocks of 40 with means within 0.05.
+
+    The later mean also has to sit under 1. A curve that is still falling, or
+    that has just jumped, is not level. A flat curve near 0.6 is.
+    """
+    recent = [float(loss) for loss in list(losses or [])[-LOSS_HISTORY:]]
+    if len(recent) < LOSS_HISTORY:
         return False
-    return all(loss < LOSS_LIMIT for loss in recent)
+    older = recent[:PLATEAU_WINDOW]
+    newer = recent[PLATEAU_WINDOW:]
+    older_mean = sum(older) / PLATEAU_WINDOW
+    newer_mean = sum(newer) / PLATEAU_WINDOW
+    if newer_mean >= PLATEAU_CEILING:
+        return False
+    return abs(newer_mean - older_mean) <= PLATEAU_BAND
+
+
+def loss_gate(losses) -> str:
+    """Return `low`, `level`, or an empty string."""
+    recent = list(losses or [])[-LOSS_STREAK:]
+    if len(recent) >= LOSS_STREAK and all(float(loss) < LOSS_LIMIT for loss in recent):
+        return "low"
+    if loss_is_level(losses):
+        return "level"
+    return ""
+
+
+def loss_is_ready(losses) -> bool:
+    """True when ten losses are under 0.45, or the curve over 80 losses is level."""
+    return loss_gate(losses) != ""
 
 
 def loss_streak(losses) -> int:
@@ -62,6 +95,7 @@ def write_card(
     burst: int = SAMPLE_BURST,
     study: int = STUDY_STEPS,
     weak: int = WEAK_LIMIT,
+    gate: str = "",
 ) -> tuple:
     """Short label and one sentence for the current writing state."""
     if hold:
@@ -76,25 +110,36 @@ def write_card(
             f" ({model_backlog} unfinished). This turn of {burst_left} equations waits and is not spent.",
         )
     if burst_left > 0:
+        if gate == "level":
+            reason = "The loss curve is level."
+        else:
+            reason = f"Loss stayed under {LOSS_LIMIT} for {LOSS_STREAK} updates."
         return (
             "Yes",
-            f"Loss stayed under {LOSS_LIMIT} for {LOSS_STREAK} updates."
-            f" {burst_left} of {burst} equations are still to add."
+            f"{reason} {burst_left} of {burst} equations are still to add."
             f" Then it studies for {study} steps.",
         )
     if study_left > 0:
         return (
             "Studying",
             f"{study_left} study steps left after its last equations."
-            f" Another turn starts only after {LOSS_STREAK} updates under {LOSS_LIMIT}.",
+            f" Another turn starts after {LOSS_STREAK} updates under {LOSS_LIMIT},"
+            f" or when the curve is level again.",
+        )
+    if gate == "level":
+        return (
+            "Ready",
+            f"The last {LOSS_HISTORY} updates sit level."
+            f" The next step adds {burst} equations, then studies for {study} steps.",
         )
     if last_loss is not None and streak == 0:
         shown = f"{float(last_loss):.3f}"
         return (
             f"0/{LOSS_STREAK}",
-            f"The last update was {shown}, above {LOSS_LIMIT}."
-            f" It needs {LOSS_STREAK} updates in a row under {LOSS_LIMIT},"
-            f" then {burst} equations and {study} study steps.",
+            f"The last update was {shown}."
+            f" {LOSS_STREAK} updates in a row under {LOSS_LIMIT} open a turn at once."
+            f" A level curve over {LOSS_HISTORY} updates opens one too."
+            f" Then {burst} equations and {study} study steps.",
         )
     return (
         f"{streak}/{LOSS_STREAK}",
@@ -106,7 +151,7 @@ def write_card(
 def remember_loss(losses, loss: float) -> list:
     recent = list(losses)
     recent.append(float(loss))
-    return recent[-LOSS_STREAK:]
+    return recent[-LOSS_HISTORY:]
 
 
 def open_burst(burst_left: int, study_left: int, ready: bool, burst: int = SAMPLE_BURST) -> tuple:
@@ -122,13 +167,27 @@ def after_sample(
     disposition: str,
     study: int = STUDY_STEPS,
 ) -> tuple:
-    """A queued equation spends one place in the turn. Then study resumes."""
-    if disposition != "queued" or burst_left <= 0:
+    """Every try spends one place in the turn. Then study resumes.
+
+    A repeat and a sentence Lean will not accept count. The turn ends either
+    way, so the next block of judged equations can move the share.
+    """
+    if burst_left <= 0 or not disposition:
         return burst_left, study_left
     burst_left -= 1
     if burst_left == 0:
         study_left = study
     return burst_left, study_left
+
+
+def fit_study(study_left: int, study: int) -> int:
+    """Cut a stored study gap down to the current budget.
+
+    A gap that is already shorter stays. The open burst is not lengthened.
+    """
+    if study_left > study:
+        return study
+    return study_left
 
 
 def after_train(study_left: int, trained: bool, *, waiting: bool = False) -> int:
@@ -152,13 +211,13 @@ def choose_action(
     loss_ready: bool,
     burst_left: int,
 ) -> str:
-    """Return train, rehearse, sample, or wait.
+    """Return train, sample, or wait.
 
     `sample` is one model equation during an open burst, and only when Lean
-    still has room. A weak window rehearses. Otherwise the proved pile is read.
+    still has room. Otherwise the proved pile is read. A weak try does not
+    switch the process into a second pass over the corpus.
     """
-    if hold:
-        return "rehearse"
+    del hold
     if lean_backlog >= high_water:
         return "wait"
     if loss_ready and burst_left > 0:
@@ -167,11 +226,15 @@ def choose_action(
 
 
 def observe(disposition: str, streak: int, limit: int = WEAK_LIMIT) -> tuple:
-    """A proved equation clears the streak. Anything else counts toward the brake."""
+    """A proved equation clears the streak. Anything else is one more weak try.
+
+    The streak is a count for the page. It does not stop the turn. The share
+    of accepted equations in the latest block is what changes the next turn.
+    """
+    del limit
     if disposition == "proved":
         return 0, False
-    streak += 1
-    return streak, streak >= limit
+    return streak + 1, False
 
 
 def depth_credit(depth: int) -> float:

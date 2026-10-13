@@ -130,6 +130,8 @@ class Engine:
         refill_when_idle: bool = False,
         lean_workers: int = 1,
         lm: bool = False,
+        probe: bool = False,
+        repair: bool = False,
         language=None,
     ) -> None:
         if isinstance(seed, bool) or not isinstance(seed, int):
@@ -141,6 +143,8 @@ class Engine:
         self.store = store
         self.lean_workers = lean_workers
         self.lm_enabled = bool(lm or language is not None)
+        self.repair = bool(repair)
+        self.probe = bool(probe) or self.repair
         self._language = language
         self.run_id = run_id
         self.seed = seed
@@ -356,7 +360,11 @@ class Engine:
             return
         from theorem_gen.learn.minilm import MiniLMService
 
-        self._language = MiniLMService(self.store.path.parent / "lm" / self.run_id)
+        self._language = MiniLMService(
+            self.store.path.parent / "lm" / self.run_id,
+            probe=self.probe,
+            repair=self.repair,
+        )
 
     def _lm_slice(self) -> None:
         if not self.lm_enabled:
@@ -380,6 +388,11 @@ class Engine:
             "job_failed",
             {"job_id": job["id"], "error": str(exc)},
         )
+        if self._language is not None and job["job_type"] == "lean_validate":
+            try:
+                self._language.note_failure(self.store, job)
+            except Exception as err:
+                print(f"lm verdict error: {err}", flush=True)
 
     def pause(self) -> None:
         run = self.store.get_run(self.run_id)
@@ -672,6 +685,8 @@ class Engine:
             "lean_timeout_s": self.lean_timeout_s,
             "until_pause": self.until_pause,
             "refill_when_idle": self.refill_when_idle,
+            "probe": self.probe,
+            "repair": self.repair,
         }
 
     def _replay_refill(self, config: dict) -> bool:

@@ -18,6 +18,8 @@ MIGRATIONS = (
     (11, "replay", "011_replay.sql"),
     (12, "attempt_context", "012_attempt_context.sql"),
     (13, "attempt_shape", "013_attempt_shape.sql"),
+    (14, "probe", "014_probe.sql"),
+    (15, "repair", "015_repair.sql"),
 )
 
 

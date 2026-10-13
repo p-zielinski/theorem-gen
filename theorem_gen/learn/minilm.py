@@ -7,7 +7,8 @@ Two role tags, each one special token:
 
 The model does not speak until one of those tags is given. Sampled equations
 are kept only when their body is not already in the run. Lean still decides
-`proved`. A weak or repeated window stops sampling and rehearses.
+`proved`. Every try spends one place in the turn, then study resumes. The
+share of accepted equations is the coefficient for the next turn.
 """
 
 from __future__ import annotations
@@ -16,13 +17,24 @@ import hashlib
 import json
 from pathlib import Path
 
-from theorem_gen.learn.errors import Backpressure
+from theorem_gen.learn.probe import (
+    CYCLE_LIMIT,
+    DRAW_COUNT,
+    FORMULA_DRAW,
+    TEMPERATURE,
+    TOP_P,
+    formula_progress,
+    lean_error_at,
+    next_draw,
+    open_repairs,
+)
 from theorem_gen.learn.prefix import is_in_flight, unread_in_prefix
 from theorem_gen.learn.replay import next_replay
 from theorem_gen.learn.balance import (
     after_sample,
     after_train,
     choose_action,
+    fit_study,
     freedom_plan,
     loss_is_ready,
     observe,
@@ -211,9 +223,9 @@ def _source_for(store, run_id: str, candidate) -> str:
 
 
 class MiniLMService:
-    """One writer-side trainer. A low-loss burst writes ten equations, then study resumes."""
+    """One writer-side trainer. A turn writes its own equations, then study resumes."""
 
-    def __init__(self, directory: Path, config=None) -> None:
+    def __init__(self, directory: Path, config=None, probe: bool = False, repair: bool = False) -> None:
         self.directory = Path(directory)
         if config is None:
             from theorem_gen.learn.minilm_model import PRODUCTION
@@ -238,17 +250,45 @@ class MiniLMService:
         self.replay_id = 0
         self._aligned = False
         self._shapes_ready = False
+        self._unbound_checked = False
+        self.repair = bool(repair)
+        self.probe = bool(probe) or self.repair
+        self.phase = "train"
+        self.cycle = 0
+        self.cycles = 0
+        self.draw_left = 0
+        self.greedy_left = 0
+        self.repair_ply = 0
+        self.repair_left = 0
+        self.repair_at = 0
+        self.repair_prefix = ""
+        self.sample_seed = 1
+        self._decoder = "argmax"
 
     def tick(self, engine) -> None:
         self._load_state(engine.store, engine.run_id)
         if not self._shapes_ready:
             remember_shapes(engine.store.conn)
             self._shapes_ready = True
+        self._requeue_unbound(engine)
         self._rewind_to_weights()
+        if self.hold and not self.probe:
+            self.hold = False
+            self.pass_cursor = 0
+            self._save_state(engine.store, engine.run_id)
+        if self.probe or self.repair:
+            self.probe = True
+            self.sample_seed = int(getattr(engine, "seed", 1)) + int(self.step)
+            self._probe_tick(engine)
+            return
         ready = loss_is_ready(self.recent_losses)
         plan = freedom_plan(self._judged_dispositions(engine.store, engine.run_id))
+        fitted = fit_study(self.study_left, plan["study"])
+        if fitted != self.study_left:
+            self.study_left = fitted
+            self._save_state(engine.store, engine.run_id)
         self.burst_left, self.study_left = open_burst(
-            self.burst_left, self.study_left, ready and not self.hold, plan["burst"]
+            self.burst_left, self.study_left, ready, plan["burst"]
         )
         action = choose_action(
             untrained=self._untrained(engine.store, engine.run_id),
@@ -285,6 +325,94 @@ class MiniLMService:
             )
             self._save_state(engine.store, engine.run_id)
 
+    def note_failure(self, store, job) -> None:
+        """A Lean job that died without a verdict is not still waiting."""
+        try:
+            payload = json.loads(job["payload_json"])
+        except (TypeError, json.JSONDecodeError):
+            return
+        candidate_id = payload.get("candidate_id")
+        if not candidate_id:
+            return
+        row = store._one(
+            """
+            SELECT id FROM model_attempts
+            WHERE run_id=? AND candidate_id=? AND disposition='queued'
+            """,
+            (job["run_id"], candidate_id),
+        )
+        if row is None:
+            return
+        store.conn.execute(
+            """
+            UPDATE model_attempts SET disposition='ill_formed'
+            WHERE id=? AND disposition='queued'
+            """,
+            (row["id"],),
+        )
+        self._apply_observation(store, job["run_id"], "ill_formed")
+
+    def _bind_source(self, engine, candidate_id: int, validation_type: str, source: str) -> None:
+        engine.store.append_event(
+            engine.run_id,
+            "bound_source",
+            {
+                "candidate_id": candidate_id,
+                "validation_type": validation_type,
+                "sha256": hashlib.sha256(source.encode("utf-8")).hexdigest(),
+            },
+        )
+
+    def _requeue_unbound(self, engine) -> None:
+        """Send a model check back to Lean when it failed before a verdict.
+
+        The first model sentence was queued without a bound source, so Lean
+        refused it and the attempt stayed 'queued'. One pass binds that source
+        and puts the job back. Later sentences are bound when they are written.
+        """
+        if self._unbound_checked:
+            return
+        rows = engine.store._all(
+            """
+            SELECT candidate_id FROM model_attempts
+            WHERE run_id=? AND disposition='queued' AND candidate_id IS NOT NULL
+            """,
+            (engine.run_id,),
+        )
+        for row in rows:
+            candidate = engine.store.get_candidate(row["candidate_id"])
+            if candidate is None:
+                continue
+            key = f"{engine.run_id}:lean_validate:{candidate['stable_id']}:proof"
+            job = engine.store._one(
+                "SELECT id, state, payload_json FROM queue_jobs WHERE idempotency_key=?",
+                (key,),
+            )
+            if job is None or job["state"] != "failed":
+                continue
+            try:
+                payload = json.loads(job["payload_json"])
+            except (TypeError, json.JSONDecodeError):
+                continue
+            source = payload.get("source") or ""
+            if not source:
+                continue
+            self._bind_source(
+                engine,
+                candidate["id"],
+                payload.get("validation_type") or "proof",
+                source,
+            )
+            engine.store.conn.execute(
+                """
+                UPDATE queue_jobs
+                SET state='queued', lease_owner=NULL, lease_expiry=NULL, updated_at=?
+                WHERE id=? AND state='failed'
+                """,
+                (engine.store.now(), job["id"]),
+            )
+        self._unbound_checked = True
+
     def note_verdict(self, store, candidate) -> None:
         try:
             provenance = json.loads(candidate["provenance"])
@@ -303,10 +431,229 @@ class MiniLMService:
             """,
             (status, candidate["run_id"], candidate["id"]),
         )
+        self._mark_progress(store, candidate)
         self._apply_observation(store, candidate["run_id"], status)
 
     def stop(self) -> None:
         self._write_weights(moments=True)
+
+    def _probe_tick(self, engine) -> None:
+        """One action of the fixed rhythm. The hundred shares one set of weights."""
+        if self.phase == "done" or self.cycles >= CYCLE_LIMIT:
+            if self.phase != "done":
+                self.phase = "done"
+                self._save_state(engine.store, engine.run_id)
+                print(f"lm probe done cycles={self.cycles} step={self.step}", flush=True)
+            return
+        if self.phase == "train":
+            outcome = self._train_page(engine, after=self.cursor_id, advance_cursor=True)
+            if outcome != "trained":
+                outcome = self._replay(engine)
+            if outcome != "trained":
+                return
+            self.phase = "draw"
+            self.draw_left = FORMULA_DRAW if self.repair else DRAW_COUNT
+            self.greedy_left = 1
+            self.repair_ply = 0
+            self.repair_left = 0
+            self.repair_at = 0
+            self.repair_prefix = ""
+            self._save_state(engine.store, engine.run_id)
+            loss = "—" if self.last_loss is None else f"{self.last_loss:.3f}"
+            label = "repair" if self.repair else "probe"
+            print(
+                f"lm {label} cycle={self.cycle + 1} step={self.step} loss={loss}",
+                flush=True,
+            )
+            return
+        if self.phase == "draw":
+            decoder, self.draw_left, self.greedy_left = next_draw(self.draw_left, self.greedy_left)
+            if not decoder:
+                self.phase = "wait"
+                self._save_state(engine.store, engine.run_id)
+                return
+            self._sample(engine, decoder=decoder)
+            if self.draw_left == 0 and self.greedy_left == 0:
+                self.phase = "wait"
+            self._save_state(engine.store, engine.run_id)
+            return
+        if self.phase == "wait":
+            if self._cycle_waiting(engine):
+                return
+            if self.repair and self._open_repair(engine):
+                self.phase = "repair"
+                self._save_state(engine.store, engine.run_id)
+                return
+            self.phase = "teach"
+            self._save_state(engine.store, engine.run_id)
+            return
+        if self.phase == "repair":
+            if self.repair_left <= 0:
+                self.phase = "wait"
+                self._save_state(engine.store, engine.run_id)
+                return
+            prompt = f"{PROPOSE_TAG}\n{self.repair_prefix}"
+            encoded, length = encode(prompt, self.config.context)
+            self._sample(
+                engine,
+                decoder="sample",
+                prompt_ids=encoded[:length],
+                prefix=self.repair_prefix,
+            )
+            self.repair_left -= 1
+            if self.repair_left == 0:
+                self.phase = "wait"
+            self._save_state(engine.store, engine.run_id)
+            return
+        if self.phase == "teach":
+            if self._teach_one(engine):
+                return
+            self.cycles += 1
+            self.cycle += 1
+            if self.cycles >= CYCLE_LIMIT:
+                self.phase = "done"
+                print(f"lm probe done cycles={self.cycles} step={self.step}", flush=True)
+            else:
+                self.phase = "train"
+            self._save_state(engine.store, engine.run_id)
+
+    def _cycle_waiting(self, engine) -> bool:
+        row = engine.store._one(
+            """
+            SELECT id FROM model_attempts
+            WHERE run_id=? AND cycle=? AND disposition='queued'
+            LIMIT 1
+            """,
+            (engine.run_id, self.cycle),
+        )
+        return row is not None
+
+    def _cycle_proved(self, engine) -> bool:
+        row = engine.store._one(
+            """
+            SELECT id FROM model_attempts
+            WHERE run_id=? AND cycle=? AND disposition='proved'
+            LIMIT 1
+            """,
+            (engine.run_id, self.cycle),
+        )
+        return row is not None
+
+    def _best_progress(self, engine, ply: int):
+        return engine.store._one(
+            """
+            SELECT equation, error_at FROM model_attempts
+            WHERE run_id=? AND cycle=? AND repair_ply=? AND decoder='sample'
+              AND error_at IS NOT NULL AND error_at > 0
+            ORDER BY error_at DESC, id DESC
+            LIMIT 1
+            """,
+            (engine.run_id, self.cycle, ply),
+        )
+
+    def _progress_values(self, engine, ply: int) -> list:
+        rows = engine.store._all(
+            """
+            SELECT error_at FROM model_attempts
+            WHERE run_id=? AND cycle=? AND repair_ply=? AND decoder='sample'
+              AND error_at IS NOT NULL
+            """,
+            (engine.run_id, self.cycle, ply),
+        )
+        return [int(row["error_at"]) for row in rows]
+
+    def _open_repair(self, engine) -> bool:
+        """Arm four endings from the furthest formula. False when nothing is closer."""
+        if self._cycle_proved(engine):
+            return False
+        if self.repair_ply == 0:
+            best = self._best_progress(engine, 0)
+            if best is None or open_repairs(0, int(best["error_at"]), []) == 0:
+                return False
+            at = int(best["error_at"])
+            self.repair_prefix = (best["equation"] or "")[:at]
+            self.repair_at = at
+            self.repair_ply = 1
+            self.repair_left = open_repairs(0, at, [])
+            return True
+        children = self._progress_values(engine, self.repair_ply)
+        width = open_repairs(self.repair_ply, self.repair_at, children)
+        if width == 0:
+            return False
+        best = self._best_progress(engine, self.repair_ply)
+        if best is None:
+            return False
+        at = int(best["error_at"])
+        self.repair_prefix = (best["equation"] or "")[:at]
+        self.repair_at = at
+        self.repair_ply += 1
+        self.repair_left = width
+        return True
+
+    def _mark_progress(self, store, candidate) -> None:
+        names = {row["name"] for row in store.conn.execute("PRAGMA table_info(model_attempts)")}
+        if "error_at" not in names:
+            return
+        attempt = store._one(
+            """
+            SELECT id, equation FROM model_attempts
+            WHERE run_id=? AND candidate_id=?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (candidate["run_id"], candidate["id"]),
+        )
+        if attempt is None:
+            return
+        validation = store._one(
+            """
+            SELECT message FROM validations
+            WHERE candidate_id=?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (candidate["id"],),
+        )
+        progress = None
+        if validation is not None:
+            source = _source_for(store, candidate["run_id"], candidate)
+            progress = formula_progress(
+                source,
+                attempt["equation"] or "",
+                lean_error_at(validation["message"], source),
+            )
+        store.conn.execute(
+            "UPDATE model_attempts SET error_at=? WHERE id=?",
+            (progress, attempt["id"]),
+        )
+
+    def _teach_one(self, engine) -> bool:
+        """One extra step on an accepted equation from this cycle. True if one was taken."""
+        row = engine.store._one(
+            """
+            SELECT id, candidate_id FROM model_attempts
+            WHERE run_id=? AND cycle=? AND disposition='proved' AND taught=0
+            ORDER BY id
+            LIMIT 1
+            """,
+            (engine.run_id, self.cycle),
+        )
+        if row is None:
+            return False
+        candidate = None
+        if row["candidate_id"] is not None:
+            candidate = engine.store.get_candidate(row["candidate_id"])
+        docs = role_documents(_source_for(engine.store, engine.run_id, candidate)) if candidate else []
+        if docs and not overflowing_length(docs, self.config.context):
+            loss = self._fit(docs)
+            self.last_loss = loss
+            self.recent_losses = remember_loss(self.recent_losses, loss)
+            self.sequences += len(docs)
+            self.step += 1
+        engine.store.conn.execute(
+            "UPDATE model_attempts SET taught=1 WHERE id=?",
+            (row["id"],),
+        )
+        self._save_state(engine.store, engine.run_id)
+        return True
 
     def _train_page(self, engine, *, after: int, advance_cursor: bool) -> str:
         """Return trained, waiting, advanced, or idle.
@@ -374,7 +721,7 @@ class MiniLMService:
         self.epoch += 1
         self._save_state(engine.store, engine.run_id)
 
-    def _replay(self, engine) -> None:
+    def _replay(self, engine) -> str:
         """One page of sentences already read. New work stays in front of this."""
         rows, nxt = next_replay(
             engine.store.conn,
@@ -394,7 +741,7 @@ class MiniLMService:
             self.step += 1
             self.sequences += len(docs)
         if nxt == self.replay_id and not docs:
-            return
+            return "idle"
         self.replay_id = nxt
         self._save_state(engine.store, engine.run_id)
         if docs and self.step % 20 == 0:
@@ -403,15 +750,27 @@ class MiniLMService:
                 f"lm replay step={self.step} replay_id={self.replay_id} cursor={self.cursor_id}",
                 flush=True,
             )
+        return "trained" if docs else "idle"
 
-    def _sample(self, engine) -> str:
+    def _sample(self, engine, decoder: str = "argmax", prompt_ids=None, prefix: str = "") -> str:
         self._ensure_seen(engine.store, engine.run_id)
         self._ensure_trainer()
-        token_ids = self.trainer.complete([PROPOSE])
-        text = decode(token_ids)
-        line = theorem_line(text)
-        if not line:
-            line = text.replace(PROPOSE_TAG, "").replace(END_TAG, "").strip()
+        self._decoder = decoder
+        temperature = TEMPERATURE if decoder == "sample" else 0.0
+        top_p = TOP_P if decoder == "sample" else 1.0
+        if prompt_ids is None:
+            prompt_ids = [PROPOSE]
+        token_ids = self.trainer.complete(list(prompt_ids), temperature=temperature, top_p=top_p)
+        if prefix:
+            extra = decode(token_ids[len(prompt_ids) :])
+            for tag in (END_TAG, PROPOSE_TAG, PROVE_TAG):
+                extra = extra.replace(tag, "")
+            line = prefix + extra.split("\n", 1)[0]
+        else:
+            text = decode(token_ids)
+            line = theorem_line(text)
+            if not line:
+                line = text.replace(PROPOSE_TAG, "").replace(END_TAG, "").strip()
         body = equation_body(line)
         if not body:
             self._record(engine, "", equation_hash(""), "ill_formed", None)
@@ -423,7 +782,8 @@ class MiniLMService:
         full = line if ":=" in line else f"{statement_line(line)} := rfl"
         if not full.startswith("theorem "):
             full = f"theorem model_eq : {body} := rfl"
-        return self._enqueue(engine, body, digest, full)
+        source = full if full.endswith("\n") else full + "\n"
+        return self._enqueue(engine, body, digest, source)
 
     def _enqueue(self, engine, body: str, digest: str, full: str) -> None:
         stable_id = f"{engine.run_id}:model:{digest[:16]}"
@@ -447,12 +807,14 @@ class MiniLMService:
             dependency_depth=0,
             held_out=False,
         )
+        source = full if full.endswith("\n") else full + "\n"
+        self._bind_source(engine, candidate["id"], "proof", source)
         engine.queue.enqueue(
             engine.run_id,
             "lean_validate",
             payload={
                 "candidate_id": candidate["id"],
-                "source": full + "\n",
+                "source": source,
                 "validation_type": "proof",
                 "counterexample_id": None,
             },
@@ -470,8 +832,8 @@ class MiniLMService:
             """
             INSERT INTO model_attempts (
               run_id, equation, equation_hash, origin, disposition, candidate_id, created_at,
-              lm_step, loss, expr_depth, expr_operators, expr_size
-            ) VALUES (?, ?, ?, 'model', ?, ?, ?, ?, ?, ?, ?, ?)
+              lm_step, loss, expr_depth, expr_operators, expr_size, decoder, cycle, repair_ply
+            ) VALUES (?, ?, ?, 'model', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 engine.run_id,
@@ -485,6 +847,9 @@ class MiniLMService:
                 None if shape is None else shape["depth"],
                 None if shape is None else shape["operators"],
                 None if shape is None else shape["size"],
+                self._decoder if self.probe else None,
+                self.cycle if self.probe else None,
+                self.repair_ply if self.repair else 0,
             ),
         )
         if disposition != "queued":
@@ -492,13 +857,10 @@ class MiniLMService:
 
     def _apply_observation(self, store, run_id: str, disposition: str) -> None:
         plan = freedom_plan(self._judged_dispositions(store, run_id))
-        streak, should_hold = observe(disposition, self.weak_streak, plan["weak"])
+        streak, _stopped = observe(disposition, self.weak_streak, plan["weak"])
         self.weak_streak = streak
         if disposition == "proved":
             self.hold = False
-        elif should_hold:
-            self.hold = True
-            self.pass_cursor = 0
         self._save_state(store, run_id)
 
     def _fit(self, docs: list) -> float:
@@ -520,6 +882,9 @@ class MiniLMService:
         weights = self.directory / "model.safetensors"
         if weights.is_file() and self.step > 0:
             self.trainer.load(weights)
+        import mlx.core as mx
+
+        mx.random.seed(int(self.sample_seed) & 0xFFFFFFFF)
 
     def _write_weights(self, moments: bool = False) -> None:
         if self.trainer is None:
@@ -745,6 +1110,20 @@ class MiniLMService:
         self.recent_losses = [float(item) for item in json.loads(row["recent_losses"] or "[]")]
         names = set(row.keys())
         self.replay_id = int(row["replay_id"]) if "replay_id" in names else 0
+        if "probe" in names:
+            self.probe = bool(row["probe"]) or self.probe
+            self.phase = row["probe_phase"] or "train"
+            self.cycle = int(row["probe_cycle"])
+            self.cycles = int(row["probe_cycles"])
+            self.draw_left = int(row["probe_draw_left"])
+            self.greedy_left = int(row["probe_greedy_left"])
+        if "probe_task" in names and (row["probe_task"] == "repair" or self.repair):
+            self.repair = True
+            self.probe = True
+            self.repair_ply = int(row["repair_ply"])
+            self.repair_left = int(row["repair_left"])
+            self.repair_at = int(row["repair_at"])
+            self.repair_prefix = row["repair_prefix"] or ""
         self._keep_replay_behind_the_cursor()
 
     def _keep_replay_behind_the_cursor(self) -> None:
@@ -761,8 +1140,10 @@ class MiniLMService:
                 INSERT INTO lm_state (
                   run_id, step, epoch, cursor_id, pass_cursor, sequences,
                   last_loss, hold, weak_streak, last_error, weights_path, updated_at,
-                  burst_left, study_left, recent_losses, replay_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  burst_left, study_left, recent_losses, replay_id,
+                  probe, probe_phase, probe_cycle, probe_cycles, probe_draw_left, probe_greedy_left,
+                  probe_task, repair_ply, repair_left, repair_at, repair_prefix
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -781,6 +1162,17 @@ class MiniLMService:
                     self.study_left,
                     json.dumps(self.recent_losses),
                     self.replay_id,
+                    1 if self.probe else 0,
+                    self.phase,
+                    self.cycle,
+                    self.cycles,
+                    self.draw_left,
+                    self.greedy_left,
+                    "repair" if self.repair else "",
+                    self.repair_ply,
+                    self.repair_left,
+                    self.repair_at,
+                    self.repair_prefix,
                 ),
             )
             return
@@ -789,7 +1181,10 @@ class MiniLMService:
             UPDATE lm_state
             SET step=?, epoch=?, cursor_id=?, pass_cursor=?, sequences=?,
                 last_loss=?, hold=?, weak_streak=?, last_error=?, weights_path=?, updated_at=?,
-                burst_left=?, study_left=?, recent_losses=?, replay_id=?
+                burst_left=?, study_left=?, recent_losses=?, replay_id=?,
+                probe=?, probe_phase=?, probe_cycle=?, probe_cycles=?,
+                probe_draw_left=?, probe_greedy_left=?,
+                probe_task=?, repair_ply=?, repair_left=?, repair_at=?, repair_prefix=?
             WHERE run_id=?
             """,
             (
@@ -808,6 +1203,17 @@ class MiniLMService:
                 self.study_left,
                 json.dumps(self.recent_losses),
                 self.replay_id,
+                1 if self.probe else 0,
+                self.phase,
+                self.cycle,
+                self.cycles,
+                self.draw_left,
+                self.greedy_left,
+                "repair" if self.repair else "",
+                self.repair_ply,
+                self.repair_left,
+                self.repair_at,
+                self.repair_prefix,
                 run_id,
             ),
         )

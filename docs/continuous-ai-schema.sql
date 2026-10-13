@@ -507,3 +507,29 @@ ALTER TABLE model_attempts ADD COLUMN loss REAL;
 ALTER TABLE model_attempts ADD COLUMN expr_depth INTEGER;
 ALTER TABLE model_attempts ADD COLUMN expr_operators INTEGER;
 ALTER TABLE model_attempts ADD COLUMN expr_size INTEGER;
+-- A probe run draws a fixed hundred, then one argmax line, and records which
+-- decoder wrote the row. NULL decoder is an older greedy row.
+-- taught marks an accepted equation that has already had its extra step.
+
+ALTER TABLE lm_state ADD COLUMN probe INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE lm_state ADD COLUMN probe_phase TEXT NOT NULL DEFAULT 'train';
+ALTER TABLE lm_state ADD COLUMN probe_cycle INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE lm_state ADD COLUMN probe_cycles INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE lm_state ADD COLUMN probe_draw_left INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE lm_state ADD COLUMN probe_greedy_left INTEGER NOT NULL DEFAULT 0;
+
+ALTER TABLE model_attempts ADD COLUMN decoder TEXT;
+ALTER TABLE model_attempts ADD COLUMN cycle INTEGER;
+ALTER TABLE model_attempts ADD COLUMN taught INTEGER NOT NULL DEFAULT 0;
+-- A repair run still draws formulas from <|propose|>. error_at is how many
+-- characters of that formula Lean read before the first error. repair_ply 0
+-- is an opening draw. 1 and 2 are endings continued from a kept prefix.
+
+ALTER TABLE lm_state ADD COLUMN probe_task TEXT NOT NULL DEFAULT '';
+ALTER TABLE lm_state ADD COLUMN repair_ply INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE lm_state ADD COLUMN repair_left INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE lm_state ADD COLUMN repair_at INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE lm_state ADD COLUMN repair_prefix TEXT NOT NULL DEFAULT '';
+
+ALTER TABLE model_attempts ADD COLUMN repair_ply INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE model_attempts ADD COLUMN error_at INTEGER;

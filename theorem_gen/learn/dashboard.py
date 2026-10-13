@@ -9,7 +9,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Optional
 
-from theorem_gen.learn.balance import LOSS_LIMIT, freedom_plan, loss_is_ready, loss_streak, write_card
+from theorem_gen.learn.balance import (
+    LOSS_LIMIT,
+    freedom_plan,
+    loss_gate,
+    loss_is_ready,
+    loss_streak,
+    write_card,
+)
 from theorem_gen.learn.effort import effort_level, lean_time_band, statement_depth, statement_measures
 from theorem_gen.learn.prefix import unread_in_prefix
 
@@ -189,6 +196,50 @@ def _mean_blocks(accepted, column: int) -> list:
     return blocks
 
 
+def running_run_id(conn) -> Optional[str]:
+    """The run a writer has marked running. The newest row wins if two are marked."""
+    row = conn.execute(
+        """
+        SELECT run_id FROM runs
+        WHERE status = 'running'
+        ORDER BY updated_at DESC, run_id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if row is None:
+        return None
+    return row["run_id"]
+
+
+def resolve_run_id(conn, requested: Optional[str] = None) -> Optional[str]:
+    """Which run the page shows.
+
+    A running row is the only source while a writer is alive. A requested id
+    is used only when every run is paused, and then only if that id exists.
+    With no request, the newest paused run is the page.
+    """
+    live = running_run_id(conn)
+    if live is not None:
+        return live
+    if requested:
+        row = conn.execute(
+            "SELECT run_id FROM runs WHERE run_id=?",
+            (requested,),
+        ).fetchone()
+        if row is not None:
+            return row["run_id"]
+    row = conn.execute(
+        """
+        SELECT run_id FROM runs
+        ORDER BY updated_at DESC, run_id DESC
+        LIMIT 1
+        """
+    ).fetchone()
+    if row is None:
+        return None
+    return row["run_id"]
+
+
 def snapshot(db_path: Path, run_id: str, *, now: Optional[float] = None) -> dict:
     conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True, timeout=8)
     conn.row_factory = sqlite3.Row
@@ -298,6 +349,16 @@ def snapshot(db_path: Path, run_id: str, *, now: Optional[float] = None) -> dict
                     "loss_ready": loss_is_ready(losses),
                     "loss_limit": LOSS_LIMIT,
                     "loss_streak": loss_streak(losses),
+                    "loss_gate": loss_gate(losses),
+                    "probe": bool(row["probe"]) if "probe" in names else False,
+                    "probe_phase": row["probe_phase"] if "probe" in names else "train",
+                    "probe_cycle": int(row["probe_cycle"]) if "probe" in names else 0,
+                    "probe_cycles": int(row["probe_cycles"]) if "probe" in names else 0,
+                    "probe_draw_left": int(row["probe_draw_left"]) if "probe" in names else 0,
+                    "probe_task": row["probe_task"] if "probe_task" in names else "",
+                    "repair_ply": int(row["repair_ply"]) if "repair_ply" in names else 0,
+                    "repair_left": int(row["repair_left"]) if "repair_left" in names else 0,
+                    "repair_at": int(row["repair_at"]) if "repair_at" in names else 0,
                 }
         unread = unread_in_prefix(conn, run_id, cursor_id)
         plan = freedom_plan(_judged_dispositions(conn, run_id))
@@ -314,6 +375,7 @@ def snapshot(db_path: Path, run_id: str, *, now: Optional[float] = None) -> dict
                 burst=plan["burst"],
                 study=plan["study"],
                 weak=plan["weak"],
+                gate=lm["loss_gate"],
             )
             lm["write_label"] = label
             lm["write_hint"] = hint
@@ -321,17 +383,19 @@ def snapshot(db_path: Path, run_id: str, *, now: Optional[float] = None) -> dict
             name: {"all": 0, "recent": 0, "previous": 0} for name in _ATTEMPT_NAMES
         }
         recent_attempts = []
+        attempt_columns = _attempt_columns(conn)
+        sample_only = _without_argmax(attempt_columns)
         if _table(conn, "model_attempts"):
             recent_after = now - _WINDOW_S
             previous_after = now - (2 * _WINDOW_S)
             for row in conn.execute(
-                """
+                f"""
                 SELECT disposition,
                        COUNT(*) AS all_n,
                        SUM(CASE WHEN CAST(created_at AS REAL) > ? THEN 1 ELSE 0 END) AS recent_n,
                        SUM(CASE WHEN CAST(created_at AS REAL) > ?
                                  AND CAST(created_at AS REAL) <= ? THEN 1 ELSE 0 END) AS previous_n
-                FROM model_attempts WHERE run_id=?
+                FROM model_attempts WHERE run_id=?{sample_only}
                 GROUP BY disposition
                 """,
                 (recent_after, previous_after, recent_after, run_id),
@@ -369,6 +433,7 @@ def snapshot(db_path: Path, run_id: str, *, now: Optional[float] = None) -> dict
             "recent_attempts": recent_attempts,
             "context_blocked": _context_blocked(conn, run_id),
             "lean_lanes": lean_lanes,
+            "probe": _probe_summary(conn, run_id, lm),
         }
     finally:
         conn.close()
@@ -402,6 +467,163 @@ def _lean_lanes(conn, run_id: str) -> dict:
     return lanes
 
 
+def _attempt_columns(conn) -> set:
+    if not _table(conn, "model_attempts"):
+        return set()
+    return {row[1] for row in conn.execute("PRAGMA table_info(model_attempts)")}
+
+
+def _without_argmax(names: set) -> str:
+    """The hundred is the measurement. The argmax line is stored apart."""
+    if "decoder" not in names:
+        return ""
+    return " AND (decoder IS NULL OR decoder='sample')"
+
+
+_VERDICT = {
+    "duplicate": "Repeated something we already had",
+    "queued": "Waiting for Lean",
+    "proved": "Lean accepted it",
+    "unresolved": "Lean could not prove it",
+    "ill_formed": "Not a valid formula",
+    "refuted": "Lean refuted it",
+}
+
+_PHASE = {
+    "train": "Training on one page of sentences Lean has accepted.",
+    "draw": "Drawing this hundred from the weights just trained.",
+    "wait": "Waiting until Lean has judged the new equations in this hundred.",
+    "teach": "Teaching an equation Lean just accepted.",
+    "done": "200 cycles are in. The model has stopped writing.",
+}
+
+_REPAIR_PHASE = {
+    "train": "Training on one page of sentences Lean has accepted.",
+    "draw": "Drawing 20 formulas from the weights just trained.",
+    "wait": "Waiting until Lean has judged this round.",
+    "repair": "The same model is writing four endings from the furthest formula.",
+    "teach": "Teaching a formula Lean just accepted.",
+    "done": "200 cycles are in. The model has stopped writing.",
+}
+
+
+def _probe_summary(conn, run_id: str, lm) -> dict:
+    empty = {
+        "on": False,
+        "shown": 0,
+        "limit": 200,
+        "phase": "",
+        "phase_label": "",
+        "distinct": 0,
+        "sample_n": 0,
+        "accepted": 0,
+        "draw_left": 0,
+        "greedy": "Not drawn yet",
+        "repair": False,
+        "furthest": 0,
+        "repair_n": 0,
+        "repair_left": 0,
+    }
+    if not lm or not lm.get("probe"):
+        return empty
+    repair = lm.get("probe_task") == "repair"
+    cycle = int(lm.get("probe_cycle") or 0)
+    phase = lm.get("probe_phase") or "train"
+    done = phase == "done"
+    shown = int(lm.get("probe_cycles") or 0) if done else int(lm.get("probe_cycles") or 0) + 1
+    distinct = 0
+    sample_n = 0
+    accepted = 0
+    greedy = "Not drawn yet"
+    furthest = 0
+    repair_n = 0
+    openings = "AND repair_ply=0" if repair and "repair_ply" in _attempt_columns(conn) else ""
+    if _table(conn, "model_attempts") and "decoder" in _attempt_columns(conn):
+        row = conn.execute(
+            f"""
+            SELECT COUNT(*) AS n, COUNT(DISTINCT equation) AS distinct_n,
+                   SUM(CASE WHEN disposition='proved' THEN 1 ELSE 0 END) AS accepted_n
+            FROM model_attempts
+            WHERE run_id=? AND cycle=? AND decoder='sample' {openings}
+            """,
+            (run_id, cycle),
+        ).fetchone()
+        sample_n = int(row["n"] or 0)
+        distinct = int(row["distinct_n"] or 0)
+        accepted = int(row["accepted_n"] or 0)
+        if repair and "repair_ply" in _attempt_columns(conn):
+            extra = conn.execute(
+                """
+                SELECT COUNT(*) AS n, MAX(error_at) AS furthest
+                FROM model_attempts
+                WHERE run_id=? AND cycle=? AND decoder='sample' AND repair_ply>0
+                """,
+                (run_id, cycle),
+            ).fetchone()
+            repair_n = int(extra["n"] or 0)
+            opening = conn.execute(
+                """
+                SELECT MAX(error_at) AS furthest FROM model_attempts
+                WHERE run_id=? AND cycle=? AND decoder='sample' AND repair_ply=0
+                """,
+                (run_id, cycle),
+            ).fetchone()
+            furthest = int(opening["furthest"] or 0)
+            if extra["furthest"] is not None:
+                furthest = max(furthest, int(extra["furthest"]))
+        greedy_row = conn.execute(
+            """
+            SELECT disposition FROM model_attempts
+            WHERE run_id=? AND cycle=? AND decoder='argmax'
+            ORDER BY id DESC LIMIT 1
+            """,
+            (run_id, cycle),
+        ).fetchone()
+        if greedy_row is not None:
+            greedy = _VERDICT.get(greedy_row["disposition"], greedy_row["disposition"])
+    return {
+        "on": True,
+        "shown": shown,
+        "limit": 200,
+        "phase": phase,
+        "phase_label": (_REPAIR_PHASE if repair else _PHASE).get(phase, phase),
+        "distinct": distinct,
+        "sample_n": sample_n,
+        "accepted": accepted,
+        "draw_left": int(lm.get("probe_draw_left") or 0),
+        "greedy": greedy,
+        "repair": repair,
+        "furthest": furthest,
+        "repair_n": repair_n,
+        "repair_left": int(lm.get("repair_left") or 0),
+    }
+
+
+def visible_text(text: str, limit: int = 72) -> str:
+    """A short preview. Control bytes and bidi marks are dropped."""
+    if not text:
+        return "(empty)"
+    kept = []
+    for ch in text:
+        code = ord(ch)
+        if ch in "\n\r\t":
+            kept.append(" ")
+            continue
+        if code < 32 or code == 127:
+            continue
+        if 0x202A <= code <= 0x202E or 0x2066 <= code <= 0x2069:
+            continue
+        if code in {0x200B, 0x200C, 0x200D, 0xFEFF}:
+            continue
+        kept.append(ch)
+    shown = " ".join("".join(kept).split())
+    if not shown:
+        return "(not printable)"
+    if len(shown) > limit:
+        return shown[: limit - 1] + "…"
+    return shown
+
+
 def _recent_attempts(conn, run_id: str) -> list:
     """Newest own equations, with the step and loss stored at the time of writing."""
     names = {row[1] for row in conn.execute("PRAGMA table_info(model_attempts)")}
@@ -422,10 +644,13 @@ def _recent_attempts(conn, run_id: str) -> list:
     ).fetchall()
     found = []
     for row in rows:
+        raw = row["equation"] or ""
         shape = _shape_of(row)
+        if "=" not in raw:
+            shape = None
         found.append(
             {
-                "equation": row["equation"],
+                "equation": visible_text(raw),
                 "disposition": row["disposition"],
                 "lm_step": None if row["lm_step"] is None else int(row["lm_step"]),
                 "loss": None if row["loss"] is None else float(row["loss"]),
@@ -441,9 +666,9 @@ def _judged_dispositions(conn, run_id: str) -> list:
     if not _table(conn, "model_attempts"):
         return []
     rows = conn.execute(
-        """
+        f"""
         SELECT disposition, equation FROM model_attempts
-        WHERE run_id=? AND disposition != 'queued'
+        WHERE run_id=? AND disposition != 'queued'{_without_argmax(_attempt_columns(conn))}
         ORDER BY CAST(created_at AS REAL), id
         """,
         (run_id,),
@@ -478,7 +703,7 @@ def _complexity(conn, run_id: str) -> dict:
         f"""
         SELECT created_at, disposition, equation, {depth}, {operators}, {size}
         FROM model_attempts
-        WHERE run_id=?
+        WHERE run_id=?{_without_argmax(names)}
         ORDER BY CAST(created_at AS REAL), id
         """,
         (run_id,),
@@ -516,9 +741,9 @@ def _acceptance_series(conn, run_id: str) -> list:
     if not _table(conn, "model_attempts"):
         return []
     rows = conn.execute(
-        """
+        f"""
         SELECT created_at, disposition FROM model_attempts
-        WHERE run_id=? AND disposition != 'queued'
+        WHERE run_id=? AND disposition != 'queued'{_without_argmax(_attempt_columns(conn))}
         ORDER BY CAST(created_at AS REAL), id
         """,
         (run_id,),
@@ -545,18 +770,29 @@ def _table(conn, name: str) -> bool:
     return row is not None
 
 
-def serve(db_path: Path, run_id: str, host: str = "127.0.0.1", port: int = 8765) -> None:
+def serve(db_path: Path, run_id: Optional[str] = None, host: str = "127.0.0.1", port: int = 8765) -> None:
     path = Path(db_path)
-    page = _PAGE.replace("__RUN__", run_id)
+
+    def shown_run_id() -> Optional[str]:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=8)
+        conn.row_factory = sqlite3.Row
+        try:
+            return resolve_run_id(conn, run_id)
+        finally:
+            conn.close()
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             if self.path.startswith("/api/summary"):
-                body = json.dumps(snapshot(path, run_id)).encode("utf-8")
+                shown = shown_run_id()
+                if shown is None:
+                    body = json.dumps({"run_id": None, "status": "no running run"}).encode("utf-8")
+                else:
+                    body = json.dumps(snapshot(path, shown)).encode("utf-8")
                 self._send(200, "application/json", body)
                 return
             if self.path in {"/", "/index.html"}:
-                self._send(200, "text/html; charset=utf-8", page.encode("utf-8"))
+                self._send(200, "text/html; charset=utf-8", _PAGE.encode("utf-8"))
                 return
             self._send(404, "text/plain", b"not found")
 
@@ -580,15 +816,16 @@ _PAGE = """<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>__RUN__</title>
+<title>Learn</title>
 <style>
-  body { font: 16px/1.45 Georgia, serif; margin: 28px auto; max-width: 980px; color: #1c1917; background: #fafaf9; }
+  body { font: 16px/1.45 Georgia, serif; margin: 28px auto; max-width: 980px; color: #1c1917; background: #fafaf9; overflow-x: hidden; }
   h1 { font-size: 28px; margin: 0; }
   h2 { font-size: 18px; margin: 28px 0 6px; }
   p { margin: 6px 0 0; color: #44403c; }
-  ul { margin: 8px 0 0; padding-left: 18px; }
-  #own-chart { background: white; border: 1px solid #e7e5e4; border-radius: 8px; margin-top: 10px; }
-  #own-chart svg { display: block; width: 100%; height: auto; }
+  ul { margin: 8px 0 0; padding-left: 18px; max-width: 100%; }
+  #own-list li { overflow-wrap: anywhere; word-break: break-word; margin: 0 0 8px; }
+  .chart { background: white; border: 1px solid #e7e5e4; border-radius: 8px; margin-top: 10px; }
+  .chart svg { display: block; width: 100%; height: auto; }
   .legend { font: 13px/1.4 sans-serif; color: #57534e; margin-top: 6px; }
   .swatch { display: inline-block; width: 18px; height: 3px; margin: 0 6px 2px 0; vertical-align: middle; }
   table { width: 100%; border-collapse: collapse; background: white; margin-top: 8px; }
@@ -598,66 +835,89 @@ _PAGE = """<!DOCTYPE html>
   .card { background: white; border: 1px solid #e7e5e4; border-radius: 8px; padding: 14px 16px; min-height: 108px; }
   .card span { display: block; color: #57534e; font: 13px/1.3 sans-serif; }
   .card b { display: block; font-size: 28px; margin: 4px 0; font-variant-numeric: tabular-nums; }
-  .card em { display: block; font-style: normal; color: #78716c; font: 13px/1.35 sans-serif; min-height: 34px; }
+  tr.yes td { font-weight: 650; color: #14532d; }
 </style>
 </head>
 <body>
-<h1>Run __RUN__</h1>
+<h1 id="run-title">Run</h1>
 <p id="meta">Loading…</p>
+<div id="probe-block" style="display:none">
+<h2>This cycle</h2>
+<p id="probe-blurb">One training step, then 100 texts drawn from those weights, then one argmax text stored apart. A text with no equation does not go to Lean. Distinct is how many of the 100 differ. The verdict table under this counts the sampled texts. The argmax line is the card on the right.</p>
 <div class="grid">
-  <div class="card"><span>Own equations accepted</span><b id="own-accepted">—</b><em id="own-accepted-hint">New equations the model wrote that Lean accepted. A repeat of a known sentence is not counted.</em></div>
-  <div class="card"><span>Accepted share</span><b id="own-share">—</b><em>Of the own equations Lean has already judged. Ones still waiting are left out. This is not a grade of difficulty.</em></div>
-  <div class="card"><span>Freedom</span><b id="freedom">—</b><em id="freedom-hint">Baseline is 10 equations in a turn, then 200 study steps. The latest block of 20 sets it. An average block comes back here.</em></div>
-  <div class="card"><span>Proved by Lean</span><b id="proved">—</b><em>Lean accepted the proof. This is the pile the model studies.</em></div>
-  <div class="card"><span>Still open</span><b id="open">—</b><em>Checked, but not proved and not rejected as nonsense.</em></div>
-  <div class="card"><span>New sentences, last 10 min</span><b id="recent">—</b><em id="recent-hint">How fast the generator is adding work.</em></div>
-  <div class="card"><span>Training step</span><b id="step">—</b><em>One small update of the model weights. Each update reads 4 proved sentences.</em></div>
-  <div class="card"><span>New material</span><b id="unread">—</b><em id="unread-hint">Proved sentences the first read has not reached. Replay of sentences already behind the cursor is not included.</em></div>
-  <div class="card"><span>Epoch</span><b id="epoch">—</b><em>How many times the model has read every proved sentence. 0 means the first read is not finished.</em></div>
-  <div class="card"><span>Loss</span><b id="loss">—</b><em>How surprised the model is by the next word. Lower is better. It began near 8.</em></div>
-  <div class="card"><span>Read position</span><b id="cursor">—</b><em>How far the first read has walked. New proved sentences sit past this number.</em></div>
-  <div class="card"><span>Replay position</span><b id="replay">—</b><em>Last id of the repeat pass over sentences already read, from the generator and the model. A resume continues after this number. 0 means the next pass starts at the beginning.</em></div>
-  <div class="card"><span>Model may write</span><b id="hold">—</b><em id="hold-hint">Low losses in a row, out of 10. At 10 it adds 10 equations, then studies for 200 steps.</em></div>
-  <div class="card"><span>Weak tries in a row</span><b id="weak">—</b><em>Repeats and failed equations. At 8 the model stops writing and studies again.</em></div>
-  <div class="card"><span>Waiting on the window</span><b id="context-blocked">—</b><em>Blocked by context limit. The start and end marks count. These proved sentences stay here until the window can hold the whole sentence.</em></div>
+  <div class="card"><span>Cycle</span><b id="probe-cycle">—</b><em id="probe-phase"></em></div>
+  <div class="card"><span id="probe-distinct-label">Distinct in the hundred</span><b id="probe-distinct">—</b><em id="probe-draws"></em></div>
+  <div class="card"><span id="probe-accepted-label">Accepted in the hundred</span><b id="probe-accepted">—</b><em id="probe-accepted-hint">New texts in this cycle that Lean accepted.</em></div>
+  <div class="card"><span>Argmax text</span><b id="probe-greedy">—</b><em id="probe-greedy-hint">Not one of the hundred. It shows the single most likely continuation.</em></div>
 </div>
+</div>
+<h2>What the model wrote</h2>
+<p>These four numbers are the model's own sentences. Accepted means the text was new and Lean took it. A repeat is not accepted. A Lean job that has finished is not, by itself, an accepted equation.</p>
+<div class="grid">
+  <div class="card"><span>Accepted</span><b id="own-accepted">—</b><em id="own-accepted-hint">New equations the model wrote that Lean accepted.</em></div>
+  <div class="card"><span>Accepted share</span><b id="own-share">—</b><em>Accepted over finished tries. Repeats and rejects are in the denominator. Tries still waiting are not.</em></div>
+  <div class="card" id="card-turn"><span>Next turn</span><b id="freedom">—</b><em id="freedom-hint">Baseline is 40 equations, then 40 study steps. The latest block of 20 sets it.</em></div>
+  <div class="card" id="card-write"><span>May write</span><b id="hold">—</b><em id="hold-hint">Ten losses under 0.45 open a turn. A level curve over 80 updates opens one too.</em></div>
+</div>
+<h2>Verdicts on those tries</h2>
+<p>This is the validity table. Lean accepted it is the only yes. Repeated means the text was already in the run, so Lean was not asked. Not a valid formula means the text is not an equation of this fragment. Waiting for Lean means the check has not finished.</p>
+<p id="attempt-trend">No finished tries in the last 20 minutes, so there is no trend yet.</p>
+<table>
+  <tr><th>What happened</th><th>All time</th><th>Last 10 min</th><th>Previous 10 min</th></tr>
+  <tr><td>Repeated something we already had</td><td id="att-duplicate-all">0</td><td id="att-duplicate-recent">0</td><td id="att-duplicate-previous">0</td></tr>
+  <tr><td>Waiting for Lean</td><td id="att-queued-all">0</td><td id="att-queued-recent">0</td><td id="att-queued-previous">0</td></tr>
+  <tr class="yes"><td>Lean accepted it</td><td id="att-proved-all">0</td><td id="att-proved-recent">0</td><td id="att-proved-previous">0</td></tr>
+  <tr><td>Lean could not prove it</td><td id="att-unresolved-all">0</td><td id="att-unresolved-recent">0</td><td id="att-unresolved-previous">0</td></tr>
+  <tr><td>Not a valid formula</td><td id="att-ill_formed-all">0</td><td id="att-ill_formed-recent">0</td><td id="att-ill_formed-previous">0</td></tr>
+  <tr><td>Lean refuted it</td><td id="att-refuted-all">0</td><td id="att-refuted-recent">0</td><td id="att-refuted-previous">0</td></tr>
+</table>
+<h2>Latest tries</h2>
+<p>Newest first. A short preview, with control characters left out. Depth is shown only when the text is an equation.</p>
+<ul id="own-list"><li>None yet.</li></ul>
 <h2>Accepted share over time</h2>
-<p>Each point is one equation Lean has already judged, in the order it was written. The dark line is the share of the last 10. The pale line is the share from the first judged equation up to that moment. A rust bar is one block of 20 and its margin. Freedom looks only at the latest of those bars. Above one half, with the margin, the turn widens. An average bar returns it to the baseline. Waiting equations are not on the chart.</p>
-<div id="own-chart"></div>
+<p>Each point is one finished try. The dark line is the share of the last 10. The pale line is the share from the first. A rust bar is one block of 20 and its margin. The next turn uses only the latest bar. Waiting tries are not on the chart.</p>
+<div id="own-chart" class="chart"></div>
 <p class="legend"><span class="swatch" style="background:#1c1917"></span>Last 10 judged <span class="swatch" style="background:#a8a29e;margin-left:16px"></span>From the start <span class="swatch" style="background:#9a3412;margin-left:16px"></span>Block of 20, with margin</p>
 <h2>Depth of accepted equations</h2>
-<p>These are new equations the model wrote that Lean accepted. Depth, the number of operators, and the number of nodes are the same three counts as the generator's syntax tree. A numeral of any size is one leaf. A comparison such as 0 = 0 has depth 1 and no operator. Each + or * counts as one operator. Text that is not a statement of this fragment is left out, not entered as zero. The dark line is the mean depth of the last 10 accepted equations. The pale line is the mean from the first. A bar on every 20 is the 95% interval of that block's mean. The freedom rule above uses a coarser version of this depth. This chart is the measurement.</p>
-<div id="depth-chart"></div>
+<p>Only sentences Lean accepted. A numeral of any size is one leaf. The dark line is the mean of the last 10. The pale line is the mean from the first. A blue bar is the 95% interval of each block of 20.</p>
+<div id="depth-chart" class="chart"></div>
 <p class="legend"><span class="swatch" style="background:#1c1917"></span>Mean of the last 10 <span class="swatch" style="background:#a8a29e;margin-left:16px"></span>Mean from the start <span class="swatch" style="background:#1e3a8a;margin-left:16px"></span>95% interval of 20</p>
 <p id="shape-summary">No accepted equation with a measured shape yet.</p>
 <h2>Operators in accepted equations</h2>
-<p>The same accepted equations. A comparison by itself stays at zero. A chain of additions raises the count by one per +.</p>
-<div id="operator-chart"></div>
+<p>The same accepted sentences. A comparison by itself stays at zero. Each + or * adds one.</p>
+<div id="operator-chart" class="chart"></div>
 <p id="operator-summary"></p>
-<h2>Latest own equations</h2>
-<p>Newest first. Accepted means Lean took a sentence that was not already in the run. The step and loss are the ones at the moment of writing. Depth is the nesting of that sentence. It is not a grade against the generator, and a longer number is not a deeper sentence.</p>
-<ul id="own-list"><li>None yet.</li></ul>
-<h2>Queues</h2>
-<p>Waiting is work not started. Checking is work happening now. Finished is done. Failed is given up. Lean checks for the generator and the model each have room for 128 unfinished items. One full lane does not close the other. The training cursor still waits at the first sentence that has no verdict yet, so a faster machine does not skip ahead.</p>
+<h2>Training</h2>
+<p>This is the study pile, mostly sentences from the generator. It is not a score of the model's own equations.</p>
+<div class="grid">
+  <div class="card"><span>Training step</span><b id="step">—</b><em>One weight update. Each update reads 4 accepted sentences.</em></div>
+  <div class="card"><span>Loss</span><b id="loss">—</b><em>Surprise at the next character. Lower is closer to the text it is reading.</em></div>
+  <div class="card"><span>Epoch</span><b id="epoch">—</b><em>How many times the first read has walked the whole pile. 0 means that walk is not finished.</em></div>
+  <div class="card"><span>New material</span><b id="unread">—</b><em id="unread-hint">Accepted sentences the first read has not reached.</em></div>
+  <div class="card"><span>Read position</span><b id="cursor">—</b><em>How far the first read has walked.</em></div>
+  <div class="card"><span>Replay position</span><b id="replay">—</b><em>Where the repeat pass is. 0 means the next pass starts at the beginning.</em></div>
+  <div class="card"><span>Accepted in the pile</span><b id="proved">—</b><em>Sentences Lean has accepted, mostly from the generator. The model studies these.</em></div>
+  <div class="card"><span>Still open</span><b id="open">—</b><em>No final status yet. Not a count of the model's waiting tries.</em></div>
+  <div class="card"><span>New sentences, last 10 min</span><b id="recent">—</b><em id="recent-hint">How fast the generator is adding work.</em></div>
+  <div class="card"><span>Misses since an accept</span><b id="weak">—</b><em id="weak-hint">Does not stop writing. The next turn follows the accepted share.</em></div>
+  <div class="card"><span>Waiting on the window</span><b id="context-blocked">—</b><em>Accepted sentences too long for the 512-token window. They wait. They are not cut.</em></div>
+</div>
+<h2>Jobs</h2>
+<p>These columns are work, not verdicts. Check finished means the job closed. It does not mean the equation was valid. Validity is in the table at the top. Each Lean lane has room for 128 jobs that are still waiting or in progress.</p>
 <table>
-  <tr><th>Queue</th><th>Waiting</th><th>Checking</th><th>Finished</th><th>Failed</th></tr>
-  <tr><td>Lean checks, generator</td><td id="lean-gen-queued">0</td><td id="lean-gen-leased">0</td><td id="lean-gen-done">0</td><td id="lean-gen-failed">0</td></tr>
-  <tr><td>Lean checks, model</td><td id="lean-model-queued">0</td><td id="lean-model-leased">0</td><td id="lean-model-done">0</td><td id="lean-model-failed">0</td></tr>
-  <tr><td>Generator ideas</td><td id="propose-queued">0</td><td id="propose-leased">0</td><td id="propose-done">0</td><td id="propose-failed">0</td></tr>
-  <tr><td>Proof attempts</td><td id="prove-queued">0</td><td id="prove-leased">0</td><td id="prove-done">0</td><td id="prove-failed">0</td></tr>
-  <tr><td>Second opinion</td><td id="alt-queued">0</td><td id="alt-leased">0</td><td id="alt-done">0</td><td id="alt-failed">0</td></tr>
-  <tr><td>Counterexamples</td><td id="cex-queued">0</td><td id="cex-leased">0</td><td id="cex-done">0</td><td id="cex-failed">0</td></tr>
+  <tr><th>Job</th><th>Waiting</th><th>In progress</th><th>Check finished</th><th>Gave up</th></tr>
+  <tr><td>Lean, generator</td><td id="lean-gen-queued">0</td><td id="lean-gen-leased">0</td><td id="lean-gen-done">0</td><td id="lean-gen-failed">0</td></tr>
+  <tr><td>Lean, model</td><td id="lean-model-queued">0</td><td id="lean-model-leased">0</td><td id="lean-model-done">0</td><td id="lean-model-failed">0</td></tr>
+  <tr><td>Generator batches</td><td id="propose-queued">0</td><td id="propose-leased">0</td><td id="propose-done">0</td><td id="propose-failed">0</td></tr>
 </table>
-<h2>Proof shape</h2>
-<p>These columns are the kind of proof. They are separate from the curriculum lesson at the top, which runs from 1 to 7 and says which generator abilities are on. A bigger number written inside an equation does not move the sentence to a higher column. A deeper formula can sit one column above its usual method. Each cell is proved / all.</p>
-<p>1 decide is a comparison such as 0 &lt;= 5. 2 rfl means both sides compute to the same value, such as (7 + 6) + (5 + 2) = 20. 3 lemma points at a library fact, such as a + 0 = a. 4 rewrite uses a library step and then an assumption, such as a = b implies a + 0 = b. Not graded means we have no syntax tree for that row, which is how sentences from the model are stored.</p>
+<h2>Generator proof kinds</h2>
+<p>Accepted / all, for the generator only. The model is not on this scale: its sentences have no proof kind from 1 to 4. 1 is a comparison (decide). 2 is rfl. 3 is a lemma. 4 is rewrite. A larger numeral does not move the column.</p>
 <table>
-  <tr><th>Who wrote it</th><th>1 decide</th><th>2 rfl</th><th>3 lemma</th><th>4 rewrite</th><th>Not graded</th></tr>
+  <tr><th></th><th>1 decide</th><th>2 rfl</th><th>3 lemma</th><th>4 rewrite</th><th>No kind</th></tr>
   <tr><td>Generator</td><td id="g1">0 / 0</td><td id="g2">0 / 0</td><td id="g3">0 / 0</td><td id="g4">0 / 0</td><td id="gn">0 / 0</td></tr>
-  <tr><td>Model</td><td id="m1">0 / 0</td><td id="m2">0 / 0</td><td id="m3">0 / 0</td><td id="m4">0 / 0</td><td id="mn">0 / 0</td></tr>
 </table>
 <h2>How long Lean took</h2>
-<p id="lean-note">Only checks saved after timing was turned on. Older rows have no time.</p>
+<p id="lean-note">Elapsed time of a check. This is the machine, not a verdict. Older checks have no time.</p>
 <table>
   <tr><th>Speed</th><th>Count</th></tr>
   <tr><td>Under 0.1 seconds</td><td id="lean-fast">0</td></tr>
@@ -665,20 +925,11 @@ _PAGE = """<!DOCTYPE html>
   <tr><td>0.5 to 2 seconds</td><td id="lean-slow">0</td></tr>
   <tr><td>Over 2 seconds</td><td id="lean-heavy">0</td></tr>
 </table>
-<h2>Equations the model tried</h2>
-<p>A repeat is skipped. A new one is checked by Lean. A good one is taught back to the model. Times are counted from the moment the model wrote the equation. Waiting for Lean is left out of the comparison. Better means a larger share of new accepted equations in the last 10 minutes than in the 10 minutes before.</p>
-<p id="attempt-trend">No finished tries in the last 20 minutes, so there is no trend yet.</p>
-<table>
-  <tr><th>What happened</th><th>All time</th><th>Last 10 min</th><th>Previous 10 min</th></tr>
-  <tr><td>Repeated something we already had</td><td id="att-duplicate-all">0</td><td id="att-duplicate-recent">0</td><td id="att-duplicate-previous">0</td></tr>
-  <tr><td>Waiting for Lean</td><td id="att-queued-all">0</td><td id="att-queued-recent">0</td><td id="att-queued-previous">0</td></tr>
-  <tr><td>Lean accepted it</td><td id="att-proved-all">0</td><td id="att-proved-recent">0</td><td id="att-proved-previous">0</td></tr>
-  <tr><td>Lean could not prove it</td><td id="att-unresolved-all">0</td><td id="att-unresolved-recent">0</td><td id="att-unresolved-previous">0</td></tr>
-  <tr><td>Not a valid formula</td><td id="att-ill_formed-all">0</td><td id="att-ill_formed-recent">0</td><td id="att-ill_formed-previous">0</td></tr>
-  <tr><td>Lean refuted it</td><td id="att-refuted-all">0</td><td id="att-refuted-recent">0</td><td id="att-refuted-previous">0</td></tr>
-</table>
 <script>
-function text(id, value) { document.getElementById(id).textContent = value; }
+function text(id, value) {
+  const node = document.getElementById(id);
+  if (node) node.textContent = value;
+}
 function job(rows, type, state) {
   const hit = (rows || []).find(r => r.job_type === type && r.state === state);
   return hit ? hit.n : 0;
@@ -689,17 +940,43 @@ function cell(block, key) {
 }
 async function refresh() {
   const data = await (await fetch("/api/summary")).json();
+  document.title = data.run_id || "Learn";
+  text("run-title", data.run_id ? ("Run " + data.run_id) : "No running run");
+  if (!data.run_id) return;
+  const probe = data.probe || {on: false};
+  const probeBlock = document.getElementById("probe-block");
+  if (probeBlock) probeBlock.style.display = probe.on ? "" : "none";
+  for (const id of ["card-turn", "card-write"]) {
+    const card = document.getElementById(id);
+    if (card) card.style.display = probe.on ? "none" : "";
+  }
+  if (probe.on) {
+    text("probe-cycle", (probe.shown || 0) + " / " + (probe.limit || 200));
+    text("probe-phase", probe.phase_label || "");
+    text("probe-distinct", probe.distinct ?? 0);
+    text("probe-accepted", probe.accepted ?? 0);
+    text("probe-greedy", probe.greedy || "Not drawn yet");
+    if (probe.repair) {
+      text("probe-blurb", "One training step on the generator, then 20 formulas from this model. Lean judges them. The same model then writes four endings from the formula it read furthest into, and four more only if one of those gets further. No other model writes.");
+      text("probe-distinct-label", "Distinct in the 20");
+      text("probe-accepted-label", "Accepted");
+      text("probe-accepted-hint", "Formulas and endings in this cycle that Lean accepted.");
+      text("probe-greedy-hint", "Not one of the 20. It shows the single most likely continuation.");
+      text("probe-draws", (probe.sample_n || 0) + " openings. " + (probe.repair_n || 0) + " endings. Furthest formula characters read: " + (probe.furthest || 0) + ". " + (probe.repair_left || 0) + " endings still to draw.");
+    } else {
+      text("probe-draws", (probe.sample_n || 0) + " sampled in this cycle. " + (probe.draw_left || 0) + " still to draw.");
+    }
+  }
   const statuses = data.statuses || {};
-  const lesson = data.curriculum_level == null ? "—" : data.curriculum_level;
-  text("meta", "State: " + data.status + ". Curriculum lesson " + lesson + " of 7. Champion: " + data.model_version + ".");
+  text("meta", "State: " + data.status + ". Champion: " + data.model_version + ".");
   const own = data.own || {};
   text("own-accepted", own.accepted ?? 0);
   text("own-accepted-hint", ownHint(own));
   text("own-share", own.finished ? (own.accepted + " / " + own.finished) : "—");
   const plan = data.freedom || {};
-  text("freedom", (plan.level || 0) === 0 ? "Baseline" : ((plan.burst || 10) + " / " + (plan.study || 200)));
+  text("freedom", (plan.level || 0) === 0 ? "Baseline" : ((plan.burst || 40) + " / " + (plan.study || 40)));
   text("freedom-hint", freedomHint(plan));
-  ownList(data.recent_attempts || []);
+  ownList(data.recent_attempts || [], probe.on);
   drawShare(data.own_series || [], plan.blocks || []);
   drawShape(data.complexity || {});
   text("proved", statuses.proved || 0);
@@ -718,6 +995,7 @@ async function refresh() {
   text("hold", lm.write_label || "—");
   text("hold-hint", lm.write_hint || "");
   text("weak", lm.weak_streak ?? 0);
+  text("weak-hint", "Does not stop writing. The next turn follows the accepted share of the latest 20, not this count.");
   text("context-blocked", data.context_blocked ?? 0);
   const jobs = data.jobs || [];
   const lanes = data.lean_lanes || {};
@@ -729,14 +1007,12 @@ async function refresh() {
   for (const [prefix, type] of [["propose","propose"],["prove","prove_primary"],["alt","prove_alternate_or_critique"],["cex","counterexample_search"]]) {
     for (const state of ["queued","leased","done","failed"]) text(prefix + "-" + state, job(jobs, type, state));
   }
-  for (const [prefix, origin] of [["g","generator"],["m","model"]]) {
-    const block = (data.effort || {})[origin] || {};
-    text(prefix + "1", cell(block, "1"));
-    text(prefix + "2", cell(block, "2"));
-    text(prefix + "3", cell(block, "3"));
-    text(prefix + "4", cell(block, "4"));
-    text(prefix + "n", cell(block, "none"));
-  }
+  const block = (data.effort || {}).generator || {};
+  text("g1", cell(block, "1"));
+  text("g2", cell(block, "2"));
+  text("g3", cell(block, "3"));
+  text("g4", cell(block, "4"));
+  text("gn", cell(block, "none"));
   const bands = data.lean_bands || {};
   text("lean-fast", bands.fast || 0);
   text("lean-normal", bands.normal || 0);
@@ -752,11 +1028,10 @@ async function refresh() {
   text("attempt-trend", trendText(data.attempt_trend || {}));
 }
 function freedomHint(plan) {
-  const burst = plan.burst || 10;
-  const study = plan.study || 200;
-  const weak = plan.weak || 8;
+  const burst = plan.burst || 40;
+  const study = plan.study || 40;
   const name = (plan.level || 0) === 0 ? "Baseline" : ((plan.level || 0) === 1 ? "Wider" : "Widest");
-  return name + ". " + burst + " equations, then " + study + " study steps. Stop after " + weak + " weak tries in a row. An average block of 20 returns to the baseline. " + (plan.next_in || 20) + " judged equations until the next block.";
+  return name + ". " + burst + " equations, then " + study + " study steps. The share of the latest block sets the next turn. An average block of 20 returns to the baseline. " + (plan.next_in || 20) + " judged equations until the next block.";
 }
 function drawShare(points, blocks) {
   const host = document.getElementById("own-chart");
@@ -900,7 +1175,7 @@ function clockLabel(seconds) {
 }
 function ownHint(own) {
   if (!own.finished && !own.waiting) {
-    return "None yet. Writing starts after 10 losses in a row under 0.45. A repeat of a known sentence is not counted.";
+    return "None yet. Writing starts after 10 losses in a row under 0.45, or when the loss stays level for 80 updates. A repeat of a known sentence is not counted.";
   }
   if (!own.accepted) {
     return "Lean has judged " + own.finished + ". None were a new accepted equation. Still waiting: " + (own.waiting || 0) + ".";
@@ -917,12 +1192,14 @@ function verdictLabel(name) {
     refuted: "Refuted"
   }[name] || name;
 }
-function ownList(rows) {
+function ownList(rows, probeOn) {
   const list = document.getElementById("own-list");
   list.replaceChildren();
   if (!rows.length) {
     const item = document.createElement("li");
-    item.textContent = "None yet. Writing starts after 10 losses in a row under 0.45.";
+    item.textContent = probeOn
+      ? "None yet. The hundred starts after the first training step on a proved sentence."
+      : "None yet. Writing starts after 10 losses in a row under 0.45, or when the loss stays level for 80 updates.";
     list.appendChild(item);
     return;
   }

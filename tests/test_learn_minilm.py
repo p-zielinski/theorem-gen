@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -20,6 +21,7 @@ from theorem_gen.learn.balance import (
     after_sample,
     after_train,
     choose_action,
+    fit_study,
     loss_is_ready,
     loss_streak,
     observe,
@@ -69,6 +71,12 @@ class BalanceTests(unittest.TestCase):
         self.assertFalse(loss_is_ready([0.3] * 9))
         self.assertFalse(loss_is_ready([0.3] * 9 + [0.45]))
         self.assertTrue(loss_is_ready([0.3] * 10))
+        self.assertFalse(loss_is_ready([0.62] * 79))
+        self.assertTrue(loss_is_ready([0.62] * 80))
+        self.assertFalse(loss_is_ready([0.70] * 40 + [0.60] * 40))
+        self.assertFalse(loss_is_ready([0.50] * 40 + [0.70] * 40))
+        self.assertTrue(loss_is_ready([0.62] * 40 + [0.64] * 40))
+        self.assertFalse(loss_is_ready([1.2] * 80))
 
     def test_a_ready_burst_writes_while_rows_remain(self):
         self.assertEqual(_action(untrained=100, epoch=0, loss_ready=True, burst_left=10), "sample")
@@ -77,20 +85,25 @@ class BalanceTests(unittest.TestCase):
         burst, study = after_sample(1, 0, "queued")
         self.assertEqual((burst, study), (0, STUDY_STEPS))
         burst, study = after_sample(4, 0, "duplicate")
-        self.assertEqual((burst, study), (4, 0))
+        self.assertEqual((burst, study), (3, 0))
+        burst, study = after_sample(1, 0, "ill_formed")
+        self.assertEqual((burst, study), (0, STUDY_STEPS))
         self.assertEqual(after_train(STUDY_STEPS, True), STUDY_STEPS - 1)
         self.assertEqual(after_train(3, False), 0)
         self.assertEqual(after_train(5, False, waiting=True), 5)
         self.assertEqual(open_burst(0, 5, True), (0, 5))
+        self.assertEqual(fit_study(180, STUDY_STEPS), STUDY_STEPS)
+        self.assertEqual(fit_study(10, STUDY_STEPS), 10)
+        self.assertEqual(fit_study(0, STUDY_STEPS), 0)
 
-    def test_weak_window_returns_to_rehearsal(self):
+    def test_a_weak_run_still_finishes_the_turn(self):
         streak = 0
         hold = False
         for _ in range(8):
             streak, hold = observe("duplicate", streak)
-        self.assertTrue(hold)
+        self.assertFalse(hold)
         self.assertEqual(streak, 8)
-        self.assertEqual(_action(hold=True, loss_ready=True, burst_left=10), "rehearse")
+        self.assertEqual(_action(hold=True, loss_ready=True, burst_left=10), "sample")
         streak, hold = observe("proved", streak)
         self.assertEqual((streak, hold), (0, False))
 
@@ -115,7 +128,7 @@ class BalanceTests(unittest.TestCase):
             hold=False, burst_left=7, study_left=0, streak=10, model_backlog=0
         )
         self.assertEqual(label, "Yes")
-        self.assertIn("7 of 10", hint)
+        self.assertIn("7 of 40", hint)
         label, hint = write_card(
             hold=False, burst_left=7, study_left=0, streak=10, model_backlog=128
         )
@@ -130,6 +143,16 @@ class BalanceTests(unittest.TestCase):
             hold=True, burst_left=10, study_left=0, streak=10, model_backlog=0
         )
         self.assertEqual(label, "No")
+        label, hint = write_card(
+            hold=False, burst_left=0, study_left=0, streak=0, model_backlog=0, gate="level"
+        )
+        self.assertEqual(label, "Ready")
+        self.assertIn("sit level", hint)
+        label, hint = write_card(
+            hold=False, burst_left=7, study_left=0, streak=0, model_backlog=0, gate="level"
+        )
+        self.assertEqual(label, "Yes")
+        self.assertIn("curve is level", hint)
 
     def test_ten_queued_equations_then_study(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -224,9 +247,89 @@ class RoleTests(unittest.TestCase):
             self.assertIn("1 + 1 = 2", job["payload_json"])
             attempt = engine.store._one("SELECT disposition FROM model_attempts")
             self.assertEqual(attempt["disposition"], "queued")
+            payload = json.loads(job["payload_json"])
+            engine._require_bound_source(payload["candidate_id"], "proof", payload["source"])
             self.assertIsNone(
                 engine.store._one("SELECT name FROM sqlite_master WHERE name='qlora_state'")
             )
+
+    def test_a_failed_unbound_check_is_sent_to_lean_again(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = make_engine(tmp, max_steps=0)
+            engine.start()
+            service = MiniLMService(Path(tmp) / "lm", TINY)
+            service._load_state(engine.store, "run-1")
+            body = "(2 = 2)"
+            digest = equation_hash(body)
+            source = "theorem model_eq : (2 = 2) := rfl\n"
+            stable_id = f"run-1:model:{digest[:16]}"
+            candidate = engine.store.upsert_candidate(
+                stable_id=stable_id,
+                run_id="run-1",
+                canonical_ast_json=json.dumps({"equation": body}, sort_keys=True),
+                structural_hash=digest,
+                kind="theorem",
+                provenance=json.dumps({"generator": "minilm", "origin": "model"}, sort_keys=True),
+                current_status="unresolved",
+                curriculum_level=1,
+                family="model",
+                ast_size=len(body),
+                depth=1,
+                proof_method="model",
+                dependency_depth=0,
+                held_out=False,
+            )
+            key = f"run-1:lean_validate:{stable_id}:proof"
+            engine.queue.enqueue(
+                "run-1",
+                "lean_validate",
+                payload={
+                    "candidate_id": candidate["id"],
+                    "source": source,
+                    "validation_type": "proof",
+                    "counterexample_id": None,
+                },
+                idempotency_key=key,
+                origin="model",
+            )
+            engine.store.conn.execute(
+                "UPDATE queue_jobs SET state='failed' WHERE idempotency_key=?",
+                (key,),
+            )
+            service._record(engine, body, digest, "queued", candidate["id"])
+            service._requeue_unbound(engine)
+            job = engine.store._one(
+                "SELECT state, payload_json FROM queue_jobs WHERE idempotency_key=?",
+                (key,),
+            )
+            self.assertEqual(job["state"], "queued")
+            payload = json.loads(job["payload_json"])
+            engine._require_bound_source(payload["candidate_id"], "proof", payload["source"])
+            service._requeue_unbound(engine)
+            again = engine.store._one("SELECT state FROM queue_jobs WHERE idempotency_key=?", (key,))
+            self.assertEqual(again["state"], "queued")
+
+    def test_a_failed_lean_job_closes_the_waiting_attempt(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = make_engine(tmp, max_steps=0)
+            engine.start()
+            service = MiniLMService(Path(tmp) / "lm", TINY)
+            service._load_state(engine.store, "run-1")
+            body = "(3 = 3)"
+            service._enqueue(engine, body, equation_hash(body), "theorem model_eq : (3 = 3) := rfl")
+            job = engine.store._one("SELECT * FROM queue_jobs WHERE idempotency_key LIKE '%model%'")
+            service.note_failure(engine.store, job)
+            attempt = engine.store._one("SELECT disposition FROM model_attempts")
+            self.assertEqual(attempt["disposition"], "ill_formed")
+            self.assertEqual(service.weak_streak, 1)
+            candidate = engine.store._one("SELECT current_status FROM candidates WHERE family='model'")
+            self.assertEqual(candidate["current_status"], "unresolved")
+            service.hold = True
+            service.pass_cursor = 40
+            service.weak_streak = 8
+            service._apply_observation(engine.store, "run-1", "ill_formed")
+            self.assertEqual(service.pass_cursor, 40)
+            self.assertTrue(service.hold)
 
     def test_proved_model_row_clears_the_brake(self):
         with tempfile.TemporaryDirectory() as tmp:

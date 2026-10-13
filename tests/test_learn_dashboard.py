@@ -14,7 +14,14 @@ for item in (str(ROOT), str(TESTS)):
         sys.path.insert(0, item)
 
 from learn_support import make_engine
-from theorem_gen.learn.dashboard import acceptance_series, attempt_trend, own_equation_summary, snapshot
+from theorem_gen.learn.dashboard import (
+    acceptance_series,
+    attempt_trend,
+    own_equation_summary,
+    resolve_run_id,
+    snapshot,
+    visible_text,
+)
 from theorem_gen.learn.effort import effort_level, lean_time_band, statement_depth, statement_measures
 
 
@@ -78,6 +85,15 @@ class EffortTests(unittest.TestCase):
 
 
 class SnapshotTests(unittest.TestCase):
+    def test_a_preview_drops_control_bytes_and_stays_short(self):
+        shown = visible_text("a\x10b\n" + ("x" * 200))
+        self.assertNotIn("\x10", shown)
+        self.assertNotIn("\n", shown)
+        self.assertTrue(shown.startswith("ab "))
+        self.assertLessEqual(len(shown), 72)
+        self.assertTrue(shown.endswith("…"))
+        self.assertEqual(visible_text("\x00\x01"), "(not printable)")
+
     def test_summary_counts_queues_and_effort_without_writing(self):
         with tempfile.TemporaryDirectory() as tmp:
             engine = make_engine(tmp, max_steps=0)
@@ -219,16 +235,16 @@ class OwnEquationTests(unittest.TestCase):
         from theorem_gen.learn.balance import freedom_plan
 
         self.assertEqual(freedom_plan(["proved"] * 19)["level"], 0)
-        self.assertEqual(freedom_plan(["proved"] * 19)["burst"], 10)
+        self.assertEqual(freedom_plan(["proved"] * 19)["burst"], 40)
         self.assertEqual(freedom_plan(["proved"] * 14 + ["duplicate"] * 6)["level"], 0)
         wider = freedom_plan(["proved"] * 16 + ["duplicate"] * 4)
-        self.assertEqual((wider["level"], wider["burst"], wider["study"]), (1, 20, 100))
+        self.assertEqual((wider["level"], wider["burst"], wider["study"]), (1, 80, 20))
         widest = freedom_plan(["proved"] * 20)
-        self.assertEqual((widest["level"], widest["burst"], widest["study"], widest["weak"]), (2, 40, 50, 16))
+        self.assertEqual((widest["level"], widest["burst"], widest["study"], widest["weak"]), (2, 160, 10, 16))
         self.assertEqual(freedom_plan(["proved"] * 40)["level"], 2)
         average = ["proved"] * 20 + ["proved"] * 10 + ["duplicate"] * 10
         self.assertEqual(freedom_plan(average)["level"], 0)
-        self.assertEqual(freedom_plan(average)["burst"], 10)
+        self.assertEqual(freedom_plan(average)["burst"], 40)
         deep_bonus = [("proved", 3)] * 16 + [("duplicate", 1)] * 4
         self.assertEqual(freedom_plan(deep_bonus)["level"], 2)
         shallow_same = [("proved", 1)] * 16 + [("duplicate", 1)] * 4
@@ -264,7 +280,7 @@ class OwnEquationTests(unittest.TestCase):
             service._save_state(engine.store, "run-1")
             service._sample = lambda _engine: "queued"
             service.tick(engine)
-            self.assertEqual(service.burst_left, 39)
+            self.assertEqual(service.burst_left, 159)
             info = snapshot(engine.store.path, "run-1")
             self.assertEqual(info["freedom"]["level"], 2)
             self.assertEqual(len(info["freedom"]["blocks"]), 3)
@@ -358,6 +374,50 @@ class AttemptTrendTests(unittest.TestCase):
             attempt_trend(_attempts(proved={"recent": 1, "previous": 2}, duplicate={"recent": 2, "previous": 1}))["direction"],
             "weaker",
         )
+
+
+class RunningRunTests(unittest.TestCase):
+    def _runs(self, directory, rows):
+        engine = make_engine(directory, max_steps=0)
+        for run_id, status, stamp in rows:
+            engine.store.conn.execute(
+                """
+                INSERT INTO runs (
+                  run_id, status, seed, config_json, curriculum_level, created_at, updated_at
+                ) VALUES (?, ?, 1, '{}', 1, ?, ?)
+                """,
+                (run_id, status, stamp, stamp),
+            )
+        engine.store.conn.commit()
+        return engine
+
+    def test_a_running_run_wins_over_a_requested_paused_id(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._runs(
+                tmp,
+                (("run-2", "paused", "2000"), ("run-3", "running", "1000")),
+            )
+            self.assertEqual(resolve_run_id(engine.store.conn, "run-2"), "run-3")
+            engine.close()
+
+    def test_the_newest_running_row_wins_when_two_are_marked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._runs(
+                tmp,
+                (("run-2", "running", "2000"), ("run-3", "running", "3000")),
+            )
+            self.assertEqual(resolve_run_id(engine.store.conn, "run-2"), "run-3")
+            engine.close()
+
+    def test_a_paused_request_is_used_only_when_nothing_is_running(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = self._runs(
+                tmp,
+                (("run-2", "paused", "2000"), ("run-3", "paused", "3000")),
+            )
+            self.assertEqual(resolve_run_id(engine.store.conn, "run-2"), "run-2")
+            self.assertEqual(resolve_run_id(engine.store.conn, None), "run-3")
+            engine.close()
 
 
 def _attempts(**overrides):

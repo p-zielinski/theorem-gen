@@ -1,8 +1,9 @@
 # Continuous Lean + SQLite loop
 
-> Last updated: 2026-10-12
-> Branch: `main` (`2c88b10`, pushed)
-> Status: in progress
+> Last updated: 2026-10-13
+> Branch: `main` (`2c88b10`, pushed; greedy pause is uncommitted)
+> Status: paused
+> Result: `docs/run-1-greedy-result.md`
 > Audit: `met_with_limitations` (`docs/continuous-ai-audit.md`), pass of 2026-10-12
 
 ## Problem & goal
@@ -52,6 +53,8 @@ The loop must be stoppable and resumable: proposal → Lean 4 → status → SQL
 - 2026-10-12: Qwen QLoRA was dropped. In its place a transformer from scratch, about 50M (`--lm`). Migration 007 drops `qlora_state` and adds `lm_state` and `model_attempts`. Order: new `proved` past the cursor, then a `<|propose|>` sample. A duplicate equation does not go to Lean. Eight weak samples set `hold` and return to a corpus pass. `learning` stays `no`. Origin: `provenance.origin` = `generator` or `model`.
 - 2026-10-12: Effort 1–4 comes from the proof method plus `ast_size` and `depth`, not from the size of a number. `model` with no AST gets no level. Migration 008 adds `validations.lean_ms` on new checks. The page: `dashboard`, read-only, port 8765.
 - 2026-10-12: On the page, columns 1–4 name the proof shape (`decide`, `rfl`, `lemma`, `rewrite`). The header says "Curriculum lesson N of 7", so they are not confused with the generator's lessons.
+- 2026-10-13: The page leads with the model's own counts and the verdict table. Lean accepted it is the only yes. The model is not on the 1–4 proof-kind table. Job columns say "Check finished", which is not a verdict. The unused role queues are off the page.
+- 2026-10-13: While the accepted share is low, the model still writes often. Baseline is 40 equations then 40 study steps. Above one half: 80 and 20. Above three quarters: 160 and 10. A stored study gap longer than that budget is shortened on the next tick.
 - 2026-10-12: Model attempts on the page have 10-minute windows and a better/weaker/same sentence. The time is `created_at` of the stored equation. `queued` does not enter the share.
 - 2026-10-12: "Still to read" was `proved`, `held_out=0`, and `id` greater than `lm_state.cursor_id`. That was the same number as `_untrained`. An own equation waited until it hit 0. One weight refresh read 4 such sentences. Later the same day the cursor was changed to stop at the first open check, and writing no longer waits for an empty pile.
 - 2026-10-12: The clock "Time until it may write" was `unread / the rate unread shrank` over the last minute in the browser. New `proved` rows were already in that rate. The first 20 seconds showed Measuring. The card was later retitled "Time to finish this read" and is no longer the writing condition. The same day the clock was removed. The remaining count is "New material": proved sentences the first read has not reached. Replay is not in that number.
@@ -59,6 +62,9 @@ The loop must be stoppable and resumable: proposal → Lean 4 → status → SQL
 - 2026-10-12: the model starts writing when 10 losses in a row are < 0.45. One turn is 10 equations in the Lean queue, then 200 study steps. Migration 010.
 - 2026-10-12: the cursor stands on the first sentence without a verdict. 128 unfinished Lean checks are separate for the generator and for the model.
 - 2026-10-12: the "Model may write" card shows the stage: `n/10`, Yes, Studying, Waiting, or No.
+- 2026-10-13: the 0.45 streak stays the fast door. A level curve is the other: the last 80 forward losses, two blocks of 40, means within 0.05, later mean under 1. A flat loss near 0.6 opens a turn. Replay still does not enter the list. The same run continues. Weights and the cursor stay.
+- 2026-10-13: a model sentence binds its Lean source when it is queued. A check that failed with "validation source is not bound" is queued again once. A Lean job that dies without a verdict closes the attempt as ill_formed, so it does not stay "Waiting for Lean".
+- 2026-10-13: a weak try no longer starts a second pass over the corpus. Every try, including a repeat, spends one place in the turn, then the model studies. The accepted share of the latest block of 20 is the coefficient for the next turn. A resume clears `lm_hold`.
 - 2026-10-12: a training step is four `proved` sentences. A shorter piece in front of an open check waits and is not its own step.
 - 2026-10-12: the README leads with the hypothesis of a model that reads only sentences Lean has accepted. The generator is the source of the first sentences. The repository text is in English.
 - 2026-10-12: When the forward read has nothing new, a replay walks proved rows already behind the cursor, generator and model together, by id. `lm_state.replay_id` (migration 011) is the last id included. A resume continues after it. The walk returns to 0 at the cursor. Replay does not enter the loss streak.
@@ -81,6 +87,7 @@ The loop must be stoppable and resumable: proposal → Lean 4 → status → SQL
 - [x] 2026-10-12: model writing starts when 10 losses in a row are < 0.45. One turn is 10 equations in the Lean queue, then 200 study steps. Migration 010.
 - [x] 2026-10-12: the cursor stands on the first sentence without a verdict. 128 unfinished Lean checks are separate for the generator and for the model.
 - [x] 2026-10-12: the "Model may write" card shows the stage: `n/10`, Yes, Studying, Waiting, or No.
+- [x] 2026-10-13: writing also starts when the last 80 forward losses sit level (two blocks of 40, means within 0.05, later mean under 1). Ten losses under 0.45 still open a turn at once.
 - [x] 2026-10-12: a training step is four `proved` sentences. A shorter piece in front of an open check waits and is not its own step.
 - [x] 2026-10-12: README leads with the model hypothesis. The generator is the source of the first sentences. Docs are in English.
 - [x] 2026-10-12: Adam moments are saved in `var/lm/<run>/adam.safetensors` next to the weights. A checkpoint without that file still starts Adam fresh.
@@ -92,13 +99,15 @@ The loop must be stoppable and resumable: proposal → Lean 4 → status → SQL
 - [x] 2026-10-12: A block of 20 widens the next turn only when its Wilson interval sits wholly above the previous block. A wholly lower block narrows the turn by one step. Steps: 10/200/8, 20/100/12, 40/50/16.
 - [x] 2026-10-12: The same block also moves one step when the nesting depth of the accepted equations clears the margin and the accepted share does not move the other way. Depth 1, 2, and 3+ are the bands. A numeral's size and Lean's elapsed time are not inputs.
 - [x] 2026-10-12: Freedom is the latest block of 20, not a ratchet. Lower Wilson bound above 1/2 is the wider turn, above 3/4 the widest. At or below 1/2, including an average block, the turn returns to 10 equations and 200 study steps at once. Deep accepted equations add one step only while the share is already above 1/2.
-- [x] 2026-10-12: Migration 013 stores `expr_depth`, `expr_operators`, and `expr_size` on `model_attempts` at the moment of writing. NULL is unparsed text, not depth 0. The page charts mean depth and mean operator count of accepted equations, with a 95% interval on each block of 20.
+- [x] 2026-10-13: A low share still writes. Baseline is 40 equations then 40 study steps, a share above one half is 80 and 20, above three quarters is 160 and 10. A stored study gap longer than the current budget is cut down on the next tick.
+- [x] 2026-10-13: The page leads with accepted count, share, next turn, and the verdict table. Proof kinds are generator-only. A finished Lean job is labeled as a finished check, not as a valid equation.
+- [x] 2026-10-13: Greedy `run-1` paused. 18,032 tries, 125 distinct names, no `=` and no Lean accept. Result in `docs/run-1-greedy-result.md`.
 
 ## Next steps
 
-1. `run-1` resumes with `--lm` and `--lean-workers 4` on the live process. Do not start a second writer. Qwen stays outside the loop.
-2. The `train_items` queue updates a small vector. 7B LoRA stays offline, on `select_training_rows`, and only if the challenger's held-out beats the champion.
-3. Do not set `learning: yes` by hand. It has to come from `learning_claimed`.
+1. Greedy `run-1` is paused (2026-10-13, SIGTERM). Do not resume it just to collect more argmax names. Do not reset `var/learn.sqlite` or delete `var/lm/run-1/`. Do not set `learning`.
+2. `run-2` is paused. The live run is `run-3` (`--repair`): twenty formulas, then up to two rounds of four endings from the same model. Details: `.cursor/work/formula-repair.md`. Do not resume `run-1` or `run-2`. Do not set `learning`.
+3. The `train_items` queue updates a small vector. 7B LoRA stays offline, on `select_training_rows`, and only if the challenger's held-out beats the champion.
 
 ## Blockers / open questions
 

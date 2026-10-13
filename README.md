@@ -1,26 +1,24 @@
 # Theorem Gen
 
-An experiment: can a language model keep going without a fixed corpus, reading only the sentences Lean 4 has accepted, and from some point adding its own? Lean stays the only judge. What Lean accepts goes back into training. What it rejects never enters the weights.
+An experiment: can a language model, trained only on sentences Lean has accepted, start to write new ones of its own? Lean is the only judge. What Lean accepts can be taught back. What it rejects never enters the weights.
 
-The generator is the road those first sentences come from. Python builds a typed tree, Lean checks the proof, and the transformer reads only what became `proved`. From then on the subject of a run is the model.
+The greedy run `run-1` is closed. Argmax wrote 125 names and no equation. The numbers are `docs/run-1-greedy-result.md`. Its weights stay in `var/lm/run-1/`. Its rows stay in `var/learn.sqlite`. Do not resume it.
 
-The hypothesis is easy to fail. Loss can stall. The model can repeat the generator, or write equations Lean will not accept. A falling loss is not development by itself. What this run can show, and what it cannot, is `docs/what-the-run-can-show.md`. The readable results are the loss on proved sentences and, once the model writes, the equations Lean accepts and their syntactic shape. `learning: yes` is a separate gate. It turns on only when a saved champion other than the generator beats a fixed held-out set on a metric other than a placeholder. The 50M transformer does not enter that gate. The loop is built so that either result, or its absence, can be read without guessing what the speed of the machine changed.
+`run-2` is paused. It drew a hundred texts per step from `<|propose|>` and did not repair them. Its weights stay in `var/lm/run-2/`. Do not resume it.
 
-## The loop
+## The measurement
 
-`python3 -m theorem_gen.learn` stores candidates in SQLite and asks Lean 4.34.1 for a verdict. `proved` and `refuted` come only from a Lean validation. The generator keeps adding batches, including one equality with variables (`generator: richgen`: rearranging sums and products, distributivity, a proof of a few `rw` steps and `ac_rfl`). From level 2 every batch also adds a review of an earlier level. Lean checks that review and it stays in the corpus, but it does not count toward the promotion gate.
+`run-3` is a new run and a new set of weights. The generator queue is unchanged: it still writes proofs, and Lean still accepts or rejects them. The model does not write until it has taken one training step on sentences Lean has already accepted. No other model is called.
 
-The process is linear, the same process you would get with no queue. A batch, Lean's verdict, training on the accepted sentences, and a possible turn of the model follow the row numbers in the database. The queue only lets several Lean checks run ahead of the cursor. A faster machine waits less. It does not skip a sentence that still has no verdict, and it does not cut a training step out of whatever happened to return first.
+Then the rhythm is fixed. The accepted share is a reading, not a throttle.
 
-The cursor stands on the first sentence without a verdict. A rejected sentence, a badly formed one, or one that is too long for the window is already decided, so the cursor passes it. A `proved` sentence outside the held-out set enters training. A training step is four such sentences in a row. If an open check stands before those four are closed, the shorter piece waits with it and is not its own step. A shorter step happens only when no sentence is left ahead. When that read has nothing new to take, a replay walks the proved sentences already behind the cursor, generator and model together, by id. `lm_state.replay_id` is the last id included, so a resume continues there. The next pass starts at 0 once the walk meets the cursor. A replay step does not count toward the ten low losses that let the model write.
+1. One training step on four proved sentences from the generator. If the first read has caught up, that step is one page of replay.
+2. Twenty formulas drawn from those weights (temperature 1, nucleus 0.9), then one argmax text stored apart. The prompt is `<|propose|>`. The model is filling a formula, not a proof.
+3. A text with no equation is "not a formula" and does not go to Lean. A text already in the run is a repeat. A new equation goes to Lean as `theorem model_eq : … := rfl`.
+4. After those twenty are judged, if none was accepted, the same model writes four endings. The prefix is the formula Lean read furthest into before the error. The error in the wrapper or in the stapled `rfl` does not count. A second four opens only when one of those endings gets strictly further. Then the branch stops.
+5. Each accepted new formula gets one immediate training step. Back to step 1.
 
-The limit of 128 is the depth of that lookahead, separately for each side. The generator may have 128 unfinished Lean checks, and the model may have 128 of its own. A full generator lane does not close the model's room, and a full model lane does not close the generator's. Other kinds of work (a new batch, roles, a counterexample) each have their own 128. Inside one list, higher priority goes first.
-
-The model writes an equation of its own when 10 training steps in a row have loss under 0.45. The baseline turn then puts 10 equations into its Lean lane and returns to study for 200 steps. That budget is the latest block of 20 judged equations, not a high-water mark. A lower Wilson bound above one half widens the next turn to 20 equations and 100 study steps. Above three quarters the turn is 40 equations and 50 study steps. At or below one half, including an average block, the next turn goes back to 10 and 200. Clearly deep accepted equations can add one step on the wider turn. They do not keep a turn the share has given back. Until a block of 20 exists, the turn stays at the baseline.
-
-A repeat of text already in the database does not spend a place in the turn. Weak tries in a row (a repeat, a badly formed sentence, no proof, a refutation) stop the writing and send the model through the corpus again. That stop is 8 at the baseline, 12 on the wider turn, and 16 on the widest. A full 128 in the model's lane also holds the writing, without spending the turn. The generator keeps going: it is still the source of sentences the model can study.
-
-The transformer has about 50 million parameters and a window of 512 tokens, counting the `<|propose|>` or `<|prove|>` mark and `<|end|>`. It trains from scratch on the closed prefix of `proved` sentences. Beside the weights, the run stores Adam's two moment buffers, so a later resume keeps the same step size. The weights are written every 20 training steps. The moment buffers, about 400 MB, are written every 500 steps and when the process stops. A checkpoint written before that file existed still starts Adam fresh once. A sentence that does not fit gets the database status `blocked by context limit` and waits until the window can hold it. It does not enter the weights as a cut-off piece. The mechanics are in `docs/continuous-ai-architecture.md`.
+The twenty share one set of weights. Distinct, out of 20, says whether the draw searched. The argmax line is not part of that twenty. Endings are the same model continuing the kept letters. The run stops the model after 200 cycles. `learning` stays off unless a saved champion other than the generator beats the held-out set. This network does not enter that gate.
 
 From the repository root:
 
@@ -28,60 +26,36 @@ From the repository root:
 export ELAN_HOME="$PWD/.toolchains/elan"
 export PATH="$ELAN_HOME/bin:$PATH"
 
-python3 -m theorem_gen.learn start --run-id run-1 --until-pause --lm
+python3 -m theorem_gen.learn start \
+  --run-id run-3 \
+  --until-pause \
+  --lm \
+  --repair \
+  --lean-workers 4
 ```
 
-Defaults: database `var/learn.sqlite` (the `var/` directory is in `.gitignore`), curriculum 1, seed 1, four theorems per batch, Lean timeout 60 s, checkpoint every 300 s. `--until-pause` removes the limit of 50 steps. The process runs until SIGINT or SIGTERM. Lean checks run in two processes (`--lean-workers`, default 2). One process stays the only SQLite writer. `--lm` turns the transformer on. Provenance shows whether a sentence was written by `generator` or `model`. Model progress:
+The database is still `var/learn.sqlite`. `start` adds `run-3` beside the paused runs. Weights go to `var/lm/run-3/`. `--until-pause` runs until SIGINT or SIGTERM. Lean checks use four processes. One process stays the only SQLite writer.
+
+Continue it the same way. The repair flag is stored on the run, so a later resume keeps the rhythm:
+
+```sh
+python3 -m theorem_gen.learn resume --run-id run-3 --until-pause --lm --lean-workers 4
+```
+
+Stop with Ctrl-C or `kill -TERM` on the writer. The signal finishes the Lean calls already started, writes the pause checkpoint, and exits 0. Do not start a second `start` or `resume` on this database while one is alive.
+
+A read-only page, not a second writer:
+
+```sh
+python3 -m theorem_gen.learn dashboard
+```
+
+The heading is the run whose status is `running`. A `--run-id` on this command is used only when every run is paused. The page is in English at `http://127.0.0.1:8765/`. The top is the current cycle: which of the 200 it is, how many of the twenty differ, how many Lean accepted, how far into a formula Lean read, and what the argmax text was. The verdict table under that counts the sampled texts. The argmax line is not in that table.
 
 ```sql
-SELECT step, epoch, cursor_id, replay_id, last_loss, hold, weak_streak
-FROM lm_state WHERE run_id='run-1';
+SELECT cycle, repair_ply, error_at, decoder, disposition, equation
+FROM model_attempts WHERE run_id='run-3' ORDER BY id;
 ```
-
-`hold = 1` means the model has stopped writing for a while and is reading the corpus again. A rising `step` does not set `learning: yes`.
-
-Effort in this fragment is a level from 1 to 4: proof method together with `ast_size` and `depth`. The size of a numeral in the formula is not difficulty. `decide` on a small tree is 1, ordinary `rfl` is 2, a larger tree or `lemma` is 3, `rewrite` or a tree from `ast_size` 12 is 4. Model rows without an AST get no level from 1 to 4. The equation text still stores depth, operator count, and node count, and the dashboard charts those. From migration 008, new Lean checks store `lean_ms`: under 0.1 s, 0.1–0.5 s, 0.5–2 s, above 2 s. Older validations have no time.
-
-A read-only view of the run, not a second writer:
-
-```sh
-python3 -m theorem_gen.learn dashboard --run-id run-1
-```
-
-The page is in English at `http://127.0.0.1:8765/`. The numbers stay in fixed places and refresh every 5 seconds. The first cards are the model's own equations: how many Lean accepted, and that count over the ones Lean has already judged. The latest sentences are listed with the training step, the loss, and the shape of the text from the moment they were written. Freedom shows Baseline until a block of 20 judged equations exists, then the budget that block earned.
-
-One chart is the accepted share across the whole history: the last 10 judged equations, the share from the first, and a margin bar for each block of 20. Two more charts measure the accepted equations, separate from that budget. One is mean syntactic depth, the last 10 and the mean from the first, with a 95% interval on every 20. The other counts operators the same way. Depth, operator count, and node count are the same three counts as the generator's syntax tree. A numeral of any size is one leaf. Text that is not a statement of this fragment is left out, not stored as zero. The three numbers are written on `model_attempts` when the equation is written.
-
-"New material" counts `proved` sentences the first read has not reached. Replay is not in that number. "Model may write" shows how many recent steps in a row have loss under 0.45.
-
-```sql
-SELECT equation, disposition, lm_step, loss, expr_depth, expr_operators, expr_size
-FROM model_attempts WHERE run_id='run-1' ORDER BY id;
-```
-
-Database state, including while the loop is running:
-
-```sh
-python3 -m theorem_gen.learn status --run-id run-1
-```
-
-Stop a live process with Ctrl-C or `kill -TERM` on its PID. The signal does not cut Lean calls that have already started: the loop finishes the current group (each one at most `--timeout`), applies pending weight steps, releases leases, writes the pause checkpoint, and exits 0. Do not start a second `start` or `resume` on the same database while the first process is alive.
-
-Continue the same run:
-
-```sh
-python3 -m theorem_gen.learn resume --run-id run-1 --lm
-```
-
-A run started with `--until-pause` resumes until the next signal. An explicit `--max-steps` on `resume` limits only that resume. Jobs left in the queue are finished; new batches arrive when there is room. `SIGKILL` does not write a pause checkpoint. `resume` then returns to the last known checkpoint (start, or the 300 s interval) and takes over orphaned leases.
-
-Replay from the start checkpoint, on a separate database `var/learn-replay.sqlite`:
-
-```sh
-python3 -m theorem_gen.learn replay --run-id run-1 --from-checkpoint 1
-```
-
-That repeats a recorded run. It does not continue one. Continuing the live database is `resume`.
 
 ## Generator
 
@@ -162,7 +136,9 @@ lake build
 
 ## Documentation
 
-- `docs/what-the-run-can-show.md` — what this run can and cannot show, and how long it is worth leaving on
+- `docs/run-1-greedy-result.md` — the closed argmax run
+- `docs/run-3-repair-can-show.md` — what the repair run can and cannot show
+- `docs/what-the-run-can-show.md` — what a run of this loop can and cannot show
 - `docs/continuous-ai-architecture.md` — the loop, statuses, gates, queue, model
 - `docs/continuous-ai-schema.sql` — the SQLite schema
 - `docs/continuous-ai-report.md` — commands actually run for that delivery
