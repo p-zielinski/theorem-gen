@@ -9,9 +9,10 @@ for item in (str(ROOT), str(TESTS)):
     if item not in sys.path:
         sys.path.insert(0, item)
 
-from learn_support import accepting_runner, make_engine
+from learn_support import accepting_runner, make_engine, seed_proved_cohort
 from theorem_gen.learn.clock import ManualClock
 from theorem_gen.learn.engine import ReplayBackend
+from theorem_gen.learn.prefix import MATERIAL_CAP
 from theorem_gen.learn.errors import Backpressure, Crash, LearnError
 from theorem_gen.learn.queue import JobQueue
 from theorem_gen.learn.store import Store
@@ -596,6 +597,55 @@ class RuntimeTests(unittest.TestCase):
         validation_keys = [row[0] for row in validations]
         self.assertEqual(len(validation_keys), len(set(validation_keys)))
         self.assertEqual(len(validation_keys), 1, label)
+
+    def test_a_full_study_pile_does_not_open_a_generator_batch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            class Cursor:
+                def __init__(self):
+                    self.cursor_id = 0
+
+            cursor = Cursor()
+            engine = make_engine(tmp, max_steps=0, lm=True, language=cursor)
+            engine.bootstrap()
+            seed_proved_cohort(engine.store, "run-1", 1, MATERIAL_CAP + 1)
+            self.assertTrue(engine._generator_waits())
+            self.assertFalse(engine._schedule_next_batch())
+            before = engine.store.count_where(
+                "SELECT COUNT(*) FROM candidates WHERE run_id=?",
+                ("run-1",),
+            )
+            self.assertFalse(engine.cooperative_step())
+            after = engine.store.count_where(
+                "SELECT COUNT(*) FROM candidates WHERE run_id=?",
+                ("run-1",),
+            )
+            self.assertEqual(after, before)
+            waiting = engine.store._one(
+                "SELECT state FROM queue_jobs WHERE idempotency_key=?",
+                ("run-1:propose:0",),
+            )
+            self.assertEqual(waiting["state"], "queued")
+            cursor.cursor_id = 10**12
+            self.assertFalse(engine._generator_waits())
+            self.assertTrue(engine._schedule_next_batch())
+
+    def test_new_material_at_the_cap_still_allows_a_batch(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            class Cursor:
+                def __init__(self):
+                    self.cursor_id = 0
+
+            engine = make_engine(tmp, max_steps=0, lm=True, language=Cursor())
+            engine.bootstrap()
+            seed_proved_cohort(engine.store, "run-1", 1, MATERIAL_CAP)
+            self.assertFalse(engine._generator_waits())
+
+    def test_a_generator_only_run_ignores_the_study_cap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = make_engine(tmp, max_steps=0)
+            engine.bootstrap()
+            seed_proved_cohort(engine.store, "run-1", 1, MATERIAL_CAP + 1)
+            self.assertFalse(engine._generator_waits())
 
     def _assert_checkpoint_crash(self, tmp):
         engine = make_engine(tmp, batch_count=1, max_steps=20)

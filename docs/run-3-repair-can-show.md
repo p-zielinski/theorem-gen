@@ -1,10 +1,10 @@
 # What run-3 can show
 
-> Written 2026-10-13, while `run-3` is in progress.
+> Written 2026-10-13, while `run-3` was in progress. The run is paused. The numbers are `docs/run-3-repair-result.md`. Do not resume it.
 > Weights: `var/lm/run-3/`. Database: `var/learn.sqlite`, run id `run-3`.
 > `run-1` and `run-2` stay paused. Do not resume them. Do not set `learning`.
 
-This note is the reading of the repair rhythm before the numbers exist. A later result note should cite it and then say which of the readings below actually occurred.
+This note is the reading of the repair rhythm before the numbers existed. The result note says which of the readings below occurred.
 
 ## What is running
 

@@ -444,6 +444,7 @@ class MiniLMService:
                 self.phase = "done"
                 self._save_state(engine.store, engine.run_id)
                 print(f"lm probe done cycles={self.cycles} step={self.step}", flush=True)
+            self._study_finished(engine)
             return
         if self.phase == "train":
             outcome = self._train_page(engine, after=self.cursor_id, advance_cursor=True)
@@ -516,6 +517,19 @@ class MiniLMService:
             else:
                 self.phase = "train"
             self._save_state(engine.store, engine.run_id)
+
+    def _study_finished(self, engine) -> None:
+        """Writing has stopped. Keep reading so the pile ahead of the cursor can fall."""
+        outcome = self._train_page(engine, after=self.cursor_id, advance_cursor=True)
+        if outcome != "trained":
+            outcome = self._replay(engine)
+        if outcome != "trained":
+            return
+        loss = "—" if self.last_loss is None else f"{self.last_loss:.3f}"
+        print(
+            f"lm study step={self.step} loss={loss} cursor={self.cursor_id}",
+            flush=True,
+        )
 
     def _cycle_waiting(self, engine) -> bool:
         row = engine.store._one(

@@ -2,6 +2,15 @@
 
 from __future__ import annotations
 
+# Proved sentences the first read has not reached. Above this, the generator
+# opens no new batch. One batch may already be queued and waits with it.
+MATERIAL_CAP = 128
+
+
+def generator_waits(unread: int, cap: int = MATERIAL_CAP) -> bool:
+    """True while new material is above the cap. At the cap, a batch may open."""
+    return int(unread) > int(cap)
+
 
 def _job_keys(run_id: str, stable_id: str) -> tuple:
     return (

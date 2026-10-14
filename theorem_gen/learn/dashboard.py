@@ -18,7 +18,7 @@ from theorem_gen.learn.balance import (
     write_card,
 )
 from theorem_gen.learn.effort import effort_level, lean_time_band, statement_depth, statement_measures
-from theorem_gen.learn.prefix import unread_in_prefix
+from theorem_gen.learn.prefix import MATERIAL_CAP, generator_waits, unread_in_prefix
 
 _WINDOW_S = 600
 _ATTEMPT_NAMES = ("duplicate", "queued", "proved", "unresolved", "ill_formed", "refuted")
@@ -383,6 +383,7 @@ def snapshot(db_path: Path, run_id: str, *, now: Optional[float] = None) -> dict
             name: {"all": 0, "recent": 0, "previous": 0} for name in _ATTEMPT_NAMES
         }
         recent_attempts = []
+        accepted_formulas = []
         attempt_columns = _attempt_columns(conn)
         sample_only = _without_argmax(attempt_columns)
         if _table(conn, "model_attempts"):
@@ -408,6 +409,7 @@ def snapshot(db_path: Path, run_id: str, *, now: Optional[float] = None) -> dict
                     "previous": int(row["previous_n"]),
                 }
             recent_attempts = _recent_attempts(conn, run_id)
+            accepted_formulas = _accepted_formulas(conn, run_id)
         series = _acceptance_series(conn, run_id)
         return {
             "run_id": run_id,
@@ -424,6 +426,8 @@ def snapshot(db_path: Path, run_id: str, *, now: Optional[float] = None) -> dict
             "lean_bands": lean_bands,
             "lm": lm,
             "unread": unread,
+            "material_cap": MATERIAL_CAP,
+            "generator_waiting": generator_waits(unread),
             "attempts": attempts,
             "attempt_trend": attempt_trend(attempts),
             "own": own_equation_summary(attempts),
@@ -431,6 +435,7 @@ def snapshot(db_path: Path, run_id: str, *, now: Optional[float] = None) -> dict
             "freedom": _freedom_with_times(plan, series),
             "complexity": _complexity(conn, run_id),
             "recent_attempts": recent_attempts,
+            "accepted_formulas": accepted_formulas,
             "context_blocked": _context_blocked(conn, run_id),
             "lean_lanes": lean_lanes,
             "probe": _probe_summary(conn, run_id, lm),
@@ -624,9 +629,32 @@ def visible_text(text: str, limit: int = 72) -> str:
     return shown
 
 
+def _attempt_view(row, *, limit: int) -> dict:
+    raw = row["equation"] or ""
+    shape = _shape_of(row)
+    if "=" not in raw:
+        shape = None
+    names = row.keys()
+    repair = row["repair_ply"] if "repair_ply" in names else None
+    cycle = row["cycle"] if "cycle" in names else None
+    decoder = row["decoder"] if "decoder" in names else None
+    return {
+        "equation": visible_text(raw, limit),
+        "disposition": row["disposition"] if "disposition" in names else "proved",
+        "lm_step": None if row["lm_step"] is None else int(row["lm_step"]),
+        "loss": None if row["loss"] is None else float(row["loss"]),
+        "expr_depth": None if shape is None else shape["depth"],
+        "expr_operators": None if shape is None else shape["operators"],
+        "expr_size": None if shape is None else shape["size"],
+        "repair_ply": None if repair is None else int(repair),
+        "cycle": None if cycle is None else int(cycle),
+        "decoder": decoder,
+    }
+
+
 def _recent_attempts(conn, run_id: str) -> list:
     """Newest own equations, with the step and loss stored at the time of writing."""
-    names = {row[1] for row in conn.execute("PRAGMA table_info(model_attempts)")}
+    names = _attempt_columns(conn)
     step = "lm_step" if "lm_step" in names else "NULL AS lm_step"
     loss = "loss" if "loss" in names else "NULL AS loss"
     depth = "expr_depth" if "expr_depth" in names else "NULL AS expr_depth"
@@ -642,24 +670,31 @@ def _recent_attempts(conn, run_id: str) -> list:
         """,
         (run_id,),
     ).fetchall()
-    found = []
-    for row in rows:
-        raw = row["equation"] or ""
-        shape = _shape_of(row)
-        if "=" not in raw:
-            shape = None
-        found.append(
-            {
-                "equation": visible_text(raw),
-                "disposition": row["disposition"],
-                "lm_step": None if row["lm_step"] is None else int(row["lm_step"]),
-                "loss": None if row["loss"] is None else float(row["loss"]),
-                "expr_depth": None if shape is None else shape["depth"],
-                "expr_operators": None if shape is None else shape["operators"],
-                "expr_size": None if shape is None else shape["size"],
-            }
-        )
-    return found
+    return [_attempt_view(row, limit=72) for row in rows]
+
+
+def _accepted_formulas(conn, run_id: str) -> list:
+    """Newest formulas the model wrote that Lean accepted. Kept apart because they are rare."""
+    names = _attempt_columns(conn)
+    step = "lm_step" if "lm_step" in names else "NULL AS lm_step"
+    loss = "loss" if "loss" in names else "NULL AS loss"
+    depth = "expr_depth" if "expr_depth" in names else "NULL AS expr_depth"
+    operators = "expr_operators" if "expr_operators" in names else "NULL AS expr_operators"
+    size = "expr_size" if "expr_size" in names else "NULL AS expr_size"
+    repair = "repair_ply" if "repair_ply" in names else "NULL AS repair_ply"
+    cycle = "cycle" if "cycle" in names else "NULL AS cycle"
+    decoder = "decoder" if "decoder" in names else "NULL AS decoder"
+    rows = conn.execute(
+        f"""
+        SELECT equation, {step}, {loss}, {depth}, {operators}, {size}, {repair}, {cycle}, {decoder}
+        FROM model_attempts
+        WHERE run_id=? AND disposition='proved'
+        ORDER BY id DESC
+        LIMIT 20
+        """,
+        (run_id,),
+    ).fetchall()
+    return [_attempt_view(row, limit=240) for row in rows]
 
 
 def _judged_dispositions(conn, run_id: str) -> list:
@@ -823,7 +858,7 @@ _PAGE = """<!DOCTYPE html>
   h2 { font-size: 18px; margin: 28px 0 6px; }
   p { margin: 6px 0 0; color: #44403c; }
   ul { margin: 8px 0 0; padding-left: 18px; max-width: 100%; }
-  #own-list li { overflow-wrap: anywhere; word-break: break-word; margin: 0 0 8px; }
+  #own-list li, #accepted-list li { overflow-wrap: anywhere; word-break: break-word; margin: 0 0 8px; }
   .chart { background: white; border: 1px solid #e7e5e4; border-radius: 8px; margin-top: 10px; }
   .chart svg { display: block; width: 100%; height: auto; }
   .legend { font: 13px/1.4 sans-serif; color: #57534e; margin-top: 6px; }
@@ -871,6 +906,9 @@ _PAGE = """<!DOCTYPE html>
   <tr><td>Not a valid formula</td><td id="att-ill_formed-all">0</td><td id="att-ill_formed-recent">0</td><td id="att-ill_formed-previous">0</td></tr>
   <tr><td>Lean refuted it</td><td id="att-refuted-all">0</td><td id="att-refuted-recent">0</td><td id="att-refuted-previous">0</td></tr>
 </table>
+<h2>Formulas Lean accepted</h2>
+<p>Newest first. Only formulas the model wrote that Lean accepted. They stay on this list because an acceptance is rare. Latest tries, below, is every recent text.</p>
+<ul id="accepted-list"><li>None yet.</li></ul>
 <h2>Latest tries</h2>
 <p>Newest first. A short preview, with control characters left out. Depth is shown only when the text is an equation.</p>
 <ul id="own-list"><li>None yet.</li></ul>
@@ -893,7 +931,7 @@ _PAGE = """<!DOCTYPE html>
   <div class="card"><span>Training step</span><b id="step">—</b><em>One weight update. Each update reads 4 accepted sentences.</em></div>
   <div class="card"><span>Loss</span><b id="loss">—</b><em>Surprise at the next character. Lower is closer to the text it is reading.</em></div>
   <div class="card"><span>Epoch</span><b id="epoch">—</b><em>How many times the first read has walked the whole pile. 0 means that walk is not finished.</em></div>
-  <div class="card"><span>New material</span><b id="unread">—</b><em id="unread-hint">Accepted sentences the first read has not reached.</em></div>
+  <div class="card"><span>New material</span><b id="unread">—</b><em id="unread-hint">Accepted sentences the first read has not reached. Above 128, the generator opens no new batch.</em></div>
   <div class="card"><span>Read position</span><b id="cursor">—</b><em>How far the first read has walked.</em></div>
   <div class="card"><span>Replay position</span><b id="replay">—</b><em>Where the repeat pass is. 0 means the next pass starts at the beginning.</em></div>
   <div class="card"><span>Accepted in the pile</span><b id="proved">—</b><em>Sentences Lean has accepted, mostly from the generator. The model studies these.</em></div>
@@ -977,6 +1015,7 @@ async function refresh() {
   text("freedom", (plan.level || 0) === 0 ? "Baseline" : ((plan.burst || 40) + " / " + (plan.study || 40)));
   text("freedom-hint", freedomHint(plan));
   ownList(data.recent_attempts || [], probe.on);
+  acceptedList(data.accepted_formulas || []);
   drawShare(data.own_series || [], plan.blocks || []);
   drawShape(data.complexity || {});
   text("proved", statuses.proved || 0);
@@ -987,7 +1026,10 @@ async function refresh() {
   text("step", lm.step ?? "—");
   const unread = data.unread ?? 0;
   text("unread", unread);
-  text("unread-hint", unreadHint(unread));
+  text("unread-hint", unreadHint(unread, data));
+  if (data.generator_waiting) {
+    text("recent-hint", "The generator is waiting because new material is above " + (data.material_cap ?? 128) + ". " + (data.recent_validations || 0) + " sentences were checked by Lean in the same 10 minutes.");
+  }
   text("epoch", lm.epoch ?? "—");
   text("loss", lm.last_loss == null ? "—" : Number(lm.last_loss).toFixed(3));
   text("cursor", lm.cursor_id ?? "—");
@@ -1192,6 +1234,37 @@ function verdictLabel(name) {
     refuted: "Refuted"
   }[name] || name;
 }
+function acceptedWhere(row) {
+  if (row.decoder === "argmax") return "argmax";
+  if (row.repair_ply === 1) return "ending";
+  if (row.repair_ply === 2) return "second ending";
+  if (row.repair_ply === 0) return "opening";
+  return "";
+}
+function acceptedList(rows) {
+  const list = document.getElementById("accepted-list");
+  if (!list) return;
+  list.replaceChildren();
+  if (!rows.length) {
+    const item = document.createElement("li");
+    item.textContent = "None yet. An accepted formula stays on this list.";
+    list.appendChild(item);
+    return;
+  }
+  for (const row of rows) {
+    const item = document.createElement("li");
+    const where = [];
+    const kind = acceptedWhere(row);
+    if (kind) where.push(kind);
+    if (row.cycle != null) where.push("cycle " + (row.cycle + 1));
+    if (row.lm_step != null) where.push("step " + row.lm_step);
+    if (row.loss != null) where.push("loss " + Number(row.loss).toFixed(3));
+    if (row.expr_depth != null) where.push("depth " + row.expr_depth + ", " + row.expr_operators + " operators, " + row.expr_size + " nodes");
+    const tail = where.length ? " (" + where.join(", ") + ")" : "";
+    item.textContent = row.equation + tail;
+    list.appendChild(item);
+  }
+}
 function ownList(rows, probeOn) {
   const list = document.getElementById("own-list");
   list.replaceChildren();
@@ -1214,11 +1287,15 @@ function ownList(rows, probeOn) {
     list.appendChild(item);
   }
 }
-function unreadHint(unread) {
-  if (unread === 0) {
-    return "The first read has caught up. Replay continues over sentences already read. A newly proved sentence raises this again.";
+function unreadHint(unread, data) {
+  const cap = (data && data.material_cap) || 128;
+  if (data && data.generator_waiting) {
+    return "The generator is waiting. No new batch opens until the first read brings this down to " + cap + ". Sentences already queued for Lean can still finish. Replay is not in this number.";
   }
-  return "Proved sentences the first read has not reached. The replay walks sentences already behind the cursor and is not in this number.";
+  if (unread === 0) {
+    return "The first read has caught up. Replay continues over sentences already read. A newly proved sentence raises this again. The generator opens a batch while this is " + cap + " or below.";
+  }
+  return "Proved sentences the first read has not reached. The generator opens a new batch while this is " + cap + " or below. Replay is not in this number.";
 }
 function trendText(trend) {
   const recentProved = trend.recent_proved || 0;

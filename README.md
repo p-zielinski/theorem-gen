@@ -6,9 +6,11 @@ The greedy run `run-1` is closed. Argmax wrote 125 names and no equation. The nu
 
 `run-2` is paused. It drew a hundred texts per step from `<|propose|>` and did not repair them. Its weights stay in `var/lm/run-2/`. Do not resume it.
 
+`run-3` is closed. Two hundred cycles of twenty formulas and up to two rounds of four endings produced no text Lean accepted. The numbers are `docs/run-3-repair-result.md`. Its weights stay in `var/lm/run-3/`. Do not resume it.
+
 ## The measurement
 
-`run-3` is a new run and a new set of weights. The generator queue is unchanged: it still writes proofs, and Lean still accepts or rejects them. The model does not write until it has taken one training step on sentences Lean has already accepted. No other model is called.
+`run-3` was a new run and a new set of weights. The generator still wrote proofs, and Lean still accepted or rejected them. While more than 128 proved sentences sat ahead of the first read, the generator opened no new batch. The model did not write until it had taken one training step on sentences Lean had already accepted. No other model was called. Do not start this run again. The command below is the record of how it was started.
 
 Then the rhythm is fixed. The accepted share is a reading, not a throttle.
 
@@ -138,6 +140,7 @@ lake build
 
 - `docs/run-1-greedy-result.md` — the closed argmax run
 - `docs/run-3-repair-can-show.md` — what the repair run can and cannot show
+- `docs/run-3-repair-result.md` — the closed repair run: endings moved the column, Lean accepted nothing
 - `docs/what-the-run-can-show.md` — what a run of this loop can and cannot show
 - `docs/continuous-ai-architecture.md` — the loop, statuses, gates, queue, model
 - `docs/continuous-ai-schema.sql` — the SQLite schema

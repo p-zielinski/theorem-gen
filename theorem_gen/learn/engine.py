@@ -15,6 +15,7 @@ from theorem_gen.learn.curriculum import assess_gate, level_is_justified
 from theorem_gen.learn.errors import Backpressure, CapabilityError, Crash, LearnError
 from theorem_gen.learn.heldout import HELD_OUT_HASHES, evaluate_held_out, scores_from_held_out
 from theorem_gen.learn.policy import CHAMPION_ID, adjudicate, admit_descendant, ensure_baseline, learning_claimed
+from theorem_gen.learn.prefix import generator_waits, unread_in_prefix
 from theorem_gen.learn.queue import INFERENCE_JOBS, LEAN_JOBS, JobQueue
 from theorem_gen.learn import minilm
 from theorem_gen.learn.train import enqueue as enqueue_train
@@ -243,6 +244,9 @@ class Engine:
                 if ran:
                     self.promote_if_ready()
                     ran = False
+                if self._generator_waits() and self._continue_after_idle(n, steps):
+                    time.sleep(0.05)
+                    continue
                 if self._continue_after_idle(n, steps) and self._schedule_next_batch():
                     continue
                 return
@@ -281,7 +285,7 @@ class Engine:
     def cooperative_step(self) -> bool:
         did = False
         inference = INFERENCE_JOBS
-        if self.scheduler.get("hold_propose"):
+        if self.scheduler.get("hold_propose") or self._generator_waits():
             inference = tuple(kind for kind in INFERENCE_JOBS if kind != "propose")
         if inference and self._serve(inference, "inference"):
             did = True
@@ -702,12 +706,36 @@ class Engine:
             return False
         return bool(self.until_pause or self.refill_when_idle)
 
+    def _read_cursor(self) -> int:
+        language = self._language
+        if language is not None and getattr(language, "cursor_id", None) is not None:
+            return int(language.cursor_id)
+        row = self.store._one(
+            "SELECT cursor_id FROM lm_state WHERE run_id=?",
+            (self.run_id,),
+        )
+        if row is None:
+            return 0
+        return int(row["cursor_id"])
+
+    def _new_material(self) -> int:
+        return unread_in_prefix(self.store.conn, self.run_id, self._read_cursor())
+
+    def _generator_waits(self) -> bool:
+        """The study pile is already past the cap. Do not open another batch."""
+        if not self.lm_enabled:
+            return False
+        return generator_waits(self._new_material())
+
     def _schedule_next_batch(self) -> bool:
         """Queue the scheduler's current proposal.
 
         A finished key for that index means the scheduler was not advanced.
         Returning false keeps the loop from enqueueing the same key forever.
+        A full study pile also refuses, without pausing the training loop.
         """
+        if self._generator_waits():
+            return False
         index = int(self.scheduler["batch_index"])
         existing = self.store._one(
             "SELECT state FROM queue_jobs WHERE idempotency_key=?",

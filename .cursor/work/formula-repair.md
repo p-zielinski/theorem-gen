@@ -1,9 +1,9 @@
 # Formula repair: twenty openings, then four endings
 
-> Last updated: 2026-10-13
+> Last updated: 2026-10-14
 > Branch: `main` (uncommitted)
-> Status: in progress
-> Writer: `run-3` started 2026-10-13, PID was 48715 at launch
+> Status: done
+> Writer: stopped 2026-10-14 with SIGTERM. `run-3` is `paused` at step 18404, phase `done`, cycles 200. Result: `docs/run-3-repair-result.md`. Do not resume.
 
 ## Problem & goal
 
@@ -33,6 +33,7 @@ Lean rejects a whole file when one character is wrong, so a long formula never b
 - 2026-10-13: An error in `theorem model_eq :` or in the stapled `:= rfl` is not progress inside the formula, so it does not open an ending.
 - 2026-10-13: `run-3` has new weights. `run-2` stays paused at step 49.
 - 2026-10-13: The dashboard heading is the run with status `running`. A `--run-id` is used only when every run is paused.
+- 2026-10-14: After cycle 200 the model stops writing formulas. The first read continues, one page per tick, so new material can fall to 128. The generator stays closed above that cap.
 
 ## Progress
 
@@ -41,11 +42,13 @@ Lean rejects a whole file when one character is wrong, so a long formula never b
 - [x] `run-2` paused with SIGTERM
 - [x] Tests for the rule and the rhythm
 - [x] `run-3` running (`--repair`, dashboard on port 8765)
+- [x] Dashboard lists formulas the model wrote that Lean accepted, newest first, apart from latest tries
+- [x] Generator waits while new material is above 128. Dashboard says so on the New material card.
 
 ## Next steps
 
-1. Leave the writer as the only SQLite writer. Resume with the README command if it is paused.
-2. Read the result against `docs/run-3-repair-can-show.md`. A larger ply-1 `error_at` means an ending got further inside one cycle. It does not mean the weights learned the miss.
+1. Leave the writer as the only SQLite writer. The generator stays idle while new material is above 128.
+2. Read the result against `docs/run-3-repair-can-show.md`. The model reached cycle 200 and stopped writing. The first read stopped with it, so the pile does not shrink on its own.
 3. Do not set `learning`. Do not resume `run-1` or `run-2`.
 
 ## Blockers / open questions

@@ -61,6 +61,30 @@ class RhythmTests(unittest.TestCase):
     def _engine(self):
         return type("E", (), {"store": None, "run_id": "run-1", "seed": 1})()
 
+    def test_a_finished_run_keeps_reading_and_does_not_draw(self):
+        service = self._service()
+        service.phase = "done"
+        service.cycles = 200
+        calls = []
+        service._train_page = lambda *_args, **_kwargs: calls.append("train") or "trained"
+        service._replay = lambda *_args, **_kwargs: calls.append("replay") or "trained"
+        service._sample = lambda *_args, **_kwargs: calls.append("sample")
+        service._probe_tick(self._engine())
+        self.assertEqual(calls, ["train"])
+        self.assertEqual(service.phase, "done")
+        self.assertEqual(service.draw_left, 0)
+
+    def test_a_finished_run_replays_when_the_page_is_idle(self):
+        service = self._service()
+        service.phase = "done"
+        calls = []
+        service._train_page = lambda *_args, **_kwargs: calls.append("train") or "idle"
+        service._replay = lambda *_args, **_kwargs: calls.append("replay") or "trained"
+        service._sample = lambda *_args, **_kwargs: calls.append("sample")
+        service._probe_tick(self._engine())
+        self.assertEqual(calls, ["train", "replay"])
+        self.assertEqual(service.phase, "done")
+
     def test_an_idle_corpus_does_not_draw(self):
         service = self._service()
         service._train_page = lambda *_args, **_kwargs: "idle"

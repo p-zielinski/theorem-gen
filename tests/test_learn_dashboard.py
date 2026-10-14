@@ -13,8 +13,9 @@ for item in (str(ROOT), str(TESTS)):
     if item not in sys.path:
         sys.path.insert(0, item)
 
-from learn_support import make_engine
+from learn_support import make_engine, seed_proved_cohort
 from theorem_gen.learn.dashboard import (
+    _PAGE,
     acceptance_series,
     attempt_trend,
     own_equation_summary,
@@ -176,6 +177,19 @@ class SnapshotTests(unittest.TestCase):
             )
             info = snapshot(Path(tmp) / "learn.sqlite", "run-1", now=float(now) + 1)
             self.assertEqual(info["unread"], 1)
+            self.assertEqual(info["material_cap"], 128)
+            self.assertFalse(info["generator_waiting"])
+
+    def test_new_material_above_128_marks_the_generator_waiting(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = make_engine(tmp, max_steps=0)
+            engine.start()
+            seed_proved_cohort(engine.store, "run-1", 1, 129)
+            info = snapshot(engine.store.path, "run-1")
+            self.assertEqual(info["unread"], 129)
+            self.assertTrue(info["generator_waiting"])
+            self.assertIn("Above 128", _PAGE)
+            self.assertIn("generator_waiting", _PAGE)
 
     def test_attempt_windows_compare_the_last_two_ten_minute_spans(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -310,6 +324,38 @@ class OwnEquationTests(unittest.TestCase):
             self.assertEqual(info["recent_attempts"][0]["expr_operators"], 0)
             self.assertEqual(info["recent_attempts"][0]["expr_size"], 3)
             self.assertEqual(info["complexity"]["accepted"], 0)
+            self.assertEqual(info["accepted_formulas"], [])
+
+    def test_accepted_formulas_stay_listed_apart_from_other_tries(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = make_engine(tmp, max_steps=0)
+            engine.start()
+            now = float(engine.store.now())
+            rows = (
+                ("1 = 1", "proved", 0, "sample"),
+                ("not a formula", "ill_formed", 0, "sample"),
+                ("2 = 2", "proved", 1, "sample"),
+            )
+            for index, (equation, disposition, ply, decoder) in enumerate(rows):
+                engine.store.conn.execute(
+                    """
+                    INSERT INTO model_attempts (
+                      run_id, equation, equation_hash, origin, disposition, candidate_id,
+                      created_at, repair_ply, decoder, cycle, lm_step, loss
+                    ) VALUES ('run-1', ?, ?, 'model', ?, NULL, ?, ?, ?, 4, 12, 0.5)
+                    """,
+                    (equation, f"hash-{index}", disposition, f"{now + index:.6f}", ply, decoder),
+                )
+            engine.store.conn.commit()
+            info = snapshot(engine.store.path, "run-1")
+            self.assertEqual(
+                [row["equation"] for row in info["accepted_formulas"]],
+                ["2 = 2", "1 = 1"],
+            )
+            self.assertEqual(info["accepted_formulas"][0]["repair_ply"], 1)
+            self.assertEqual(info["accepted_formulas"][0]["cycle"], 4)
+            self.assertEqual(info["recent_attempts"][0]["disposition"], "proved")
+            engine.close()
 
     def test_accepted_depth_is_a_mean_with_an_interval(self):
         from theorem_gen.learn.dashboard import complexity_series
