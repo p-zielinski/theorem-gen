@@ -1,4 +1,4 @@
-# Stage 2 — variables and general theorems
+# Stage 2: variables and general theorems
 
 > Completed: 2026-10-11
 > Status: done

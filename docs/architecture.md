@@ -1,7 +1,7 @@
 # Architecture
 
 > Last updated: 2026-10-11
-> Code in force: stages 0–8. The default CLI path still generates the concrete theorems of stage 1. A separate SQLite loop is described in `docs/continuous-ai-architecture.md` and does not change this contract. That loop trains its own transformer on sentences Lean has accepted and may append equations from the model. The `proved` verdict still belongs to Lean.
+> Code in force: stages 0-8. The default CLI path still generates the concrete theorems of stage 1. A separate SQLite loop is described in `docs/continuous-ai-architecture.md` and does not change this contract. That loop trains its own transformer on sentences Lean has accepted and may append equations from the model. The `proved` verdict still belongs to Lean.
 
 The generator builds theorems as a tree, not as pasted text. Lean receives a finished, narrow fragment of the language and checks the proof itself.
 

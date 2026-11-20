@@ -1,4 +1,4 @@
-# Stage 0 — analysis and technical plan
+# Stage 0: analysis and technical plan
 
 > Date: 2026-10-11
 > Status: done
@@ -60,7 +60,7 @@ In the code:
 - export of a Lean module
 - verification by a `lake env lean` process with a time limit
 
-Outside stage 0, added later in stages 2–8:
+Outside stage 0, added later in stages 2-8:
 
 - variables, quantifiers, implications
 - a wider AST
@@ -88,7 +88,7 @@ docs/                 architecture, stages, reports
 
 `generate(config)` returns a list of theorems. The same config gives the same result. With one rule the generator does not spend a draw on choosing it. The number generator is a 32-bit LCG (multiplier `1664525`, increment `1013904223`), independent of Python's `random`.
 
-Export: `export_module(theorems, config)` — a file with a configuration comment and the theorems.
+Export: `export_module(theorems, config)`: a file with a configuration comment and the theorems.
 
 Verification: `verify_source` / `verify_theorems`. Statuses: `proved`, `failed`, `timeout`, `unavailable`. Failure class when the status is `failed`: `syntax`, `typing`, `proof`, `rejected`, `other`.
 

@@ -20,9 +20,9 @@ Logged forward steps in `var/learn-run-1.log` (`lm step=`, not replay):
 | Step | Median loss in that band | Cursor around there |
 |------|--------------------------|---------------------|
 | 20 | 3.37 (the first logged step) | 80 |
-| 4,000–14,000 | 0.32–0.37 | short generator sentences |
+| 4,000-14,000 | 0.32-0.37 | short generator sentences |
 | ~18,000 | steps up to about 0.59 | ~77,000, longer equalities |
-| 76,000–78,000 | 0.61–0.63 | past 150,000 |
+| 76,000-78,000 | 0.61-0.63 | past 150,000 |
 
 At the pause: step 79,812, epoch 1, cursor 154,977, replay id 101,191, last loss 0.668.
 

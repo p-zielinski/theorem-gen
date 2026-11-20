@@ -1,4 +1,4 @@
-# Stage 5 — complexity
+# Stage 5: complexity
 
 > Completed: 2026-10-11
 > Status: done
@@ -20,12 +20,12 @@
 
 The generator hits each of the six measures:
 
-- `ast_size` 5–5 and `variables` 0–0 for `add_zero` leaves `((8 + 0) = 8)`
-- `depth` 2–2 and `operators` 1–1 also leave that sentence; `operators` 0–0 chooses `(8 <= 8)`
-- `variables` 1–1 chooses `add_zero_all`, and 2–2 chooses `add_comm_all`
-- `dependencies` 1–1 and `definitions` 1–1 with the rule `use_definition` choose the theorem about `double`; the citation has `discovered=False`
+- `ast_size` 5-5 and `variables` 0-0 for `add_zero` leaves `((8 + 0) = 8)`
+- `depth` 2-2 and `operators` 1-1 also leave that sentence; `operators` 0-0 chooses `(8 <= 8)`
+- `variables` 1-1 chooses `add_zero_all`, and 2-2 chooses `add_comm_all`
+- `dependencies` 1-1 and `definitions` 1-1 with the rule `use_definition` choose the theorem about `double`; the citation has `discovered=False`
 
-When every `add_zero` candidate fits `ast_size` 5–5 and `variables` 0–0, seed 1 still gives `((8 + 0) = 8)` and `((7 + 0) = 7)`. The concrete header stays with the stage 1 banner and adds a `complexity` line.
+When every `add_zero` candidate fits `ast_size` 5-5 and `variables` 0-0, seed 1 still gives `((8 + 0) = 8)` and `((7 + 0) = 7)`. The concrete header stays with the stage 1 banner and adds a `complexity` line.
 
 The definition count with no registry counts `Const` nodes. With a registry it counts dependencies whose record has kind `definition`.
 

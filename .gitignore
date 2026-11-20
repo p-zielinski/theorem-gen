@@ -5,3 +5,5 @@ lean/.lake/
 lean/TheoremGen/Scratch.lean
 .DS_Store
 var/
+
+.cursor/work/

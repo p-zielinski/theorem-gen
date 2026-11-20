@@ -1,0 +1,445 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Theorem Gen, stages and runs</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Newsreader:opsz,wght@6..72,500;6..72,650&family=Red+Hat+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--stage-bg, #000); }
+.deck-viewport { position: fixed; inset: 0; overflow: hidden; background: var(--stage-bg, #000); }
+.deck-stage { position: absolute; left: 0; top: 0; width: 1920px; height: 1080px; overflow: hidden; transform-origin: 0 0; background: var(--slide-bg, #fff); }
+.slide { position: absolute; inset: 0; width: 1920px; height: 1080px; overflow: hidden; display: block; visibility: hidden; opacity: 0; pointer-events: none; background: var(--slide-bg, #fff); }
+.slide.active, .slide.visible { visibility: visible; opacity: 1; pointer-events: auto; z-index: 1; }
+img, video, canvas, svg { max-width: 100%; max-height: 100%; }
+.deck-controls { position: fixed; left: 50%; bottom: 22px; transform: translateX(-50%); z-index: 1000; }
+@media print {
+  html, body { width: 1920px; height: auto; overflow: visible; background: #fff; }
+  .deck-viewport { position: static; overflow: visible; background: #fff; }
+  .deck-stage { position: static; width: auto; height: auto; transform: none !important; background: none; }
+  .slide { position: relative; display: block !important; visibility: visible !important; opacity: 1 !important; pointer-events: auto !important; width: 1920px; height: 1080px; break-after: page; page-break-after: always; }
+  .slide:last-child { break-after: auto; page-break-after: auto; }
+  .deck-controls { display: none !important; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.2s !important; }
+}
+:root {
+  --stage-bg: #06110e;
+  --slide-bg: #071410;
+  --ink: #e8f6ec;
+  --dim: #9bb8a6;
+  --acid: #d6ff4a;
+  --rust: #ff7a59;
+  --line: #1d3a30;
+  --card: #0d1f1a;
+}
+* { box-sizing: border-box; }
+.slide {
+  color: var(--ink);
+  font-family: "Red Hat Mono", ui-monospace, Menlo, monospace;
+  padding: 68px 80px 60px;
+  background:
+    linear-gradient(135deg, rgba(214,255,74,0.07) 0%, transparent 32%),
+    repeating-linear-gradient(90deg, rgba(214,255,74,0.035) 0 1px, transparent 1px 96px),
+    #071410;
+}
+.kicker { letter-spacing: 0.2em; text-transform: uppercase; color: var(--acid); font-size: 18px; margin: 0 0 16px; }
+h1 { font-family: Newsreader, "Iowan Old Style", Palatino, serif; font-weight: 650; font-size: 84px; line-height: 0.96; margin: 0 0 22px; }
+h2 { font-family: Newsreader, Palatino, serif; font-weight: 650; font-size: 58px; line-height: 1.02; margin: 0 0 22px; }
+p, li { font-size: 24px; line-height: 1.36; }
+.lead { font-size: 30px; line-height: 1.34; color: var(--dim); max-width: 1560px; }
+ul { margin: 8px 0 0; padding-left: 26px; }
+li { margin: 8px 0; }
+.grid { display: grid; gap: 18px; }
+.g2 { grid-template-columns: 1fr 1fr; }
+.g3 { grid-template-columns: 1fr 1fr 1fr; }
+.card { background: var(--card); border-left: 6px solid var(--acid); padding: 22px 24px; }
+.card h3 { font-family: Newsreader, Palatino, serif; font-size: 32px; margin: 0 0 8px; }
+.card p, .card li { font-size: 20px; color: var(--dim); }
+.num { font-family: Newsreader, Palatino, serif; font-size: 68px; color: var(--acid); margin: 0; line-height: 1; }
+.lbl { font-size: 16px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--dim); margin-top: 6px; }
+table { width: 100%; border-collapse: collapse; font-size: 20px; }
+th { text-align: left; color: var(--acid); font-weight: 500; font-size: 15px; letter-spacing: 0.1em; text-transform: uppercase; padding: 8px 10px; border-bottom: 1px solid var(--acid); }
+td { padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.rust { color: var(--rust); }
+.foot { position: absolute; left: 80px; right: 80px; bottom: 32px; display: flex; justify-content: space-between; color: var(--dim); font-size: 16px; letter-spacing: 0.12em; text-transform: uppercase; }
+.deck-controls { color: #e8f6ec; font-family: "Red Hat Mono", monospace; font-size: 14px; background: rgba(7,20,16,0.9); border: 1px solid #1d3a30; padding: 8px 16px; }
+</style>
+</head>
+<body>
+<div class="deck-viewport"><div class="deck-stage" id="stage">
+
+<section class="slide active">
+  <p class="kicker">Theorem Gen · Lean 4.34.1 · two roads</p>
+  <h1>Lean accepts the generator. The model never wrote a new equation Lean kept.</h1>
+  <p class="lead">Stages 0-8 are done: a seed writes the same Lean file every time. The learning loop is a separate process, about 50 million parameters, context 512, trained from scratch. run-1 accepted 0 of 18,032 tries. run-3 accepted 0 of 5,496 samples. run-4 accepted 185 hole guesses, every one the original parenthesis.</p>
+  <div class="foot"><span>test-llm-2</span><span>01</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">Two approaches</p>
+  <h2>A deterministic file, and a loop that may only teach what Lean already took.</h2>
+  <div class="grid g2">
+    <div class="card">
+      <h3>Generator</h3>
+      <p>Stages 0-8. The theorem is a tree, then Lean syntax. The same seed produces the same sentences. That file is not the model's corpus. This road has no loop database. Default CLI: concrete theorems about Nat. Also richgen, generate_general, the double definition, assess_hypothesis, and explore.</p>
+    </div>
+    <div class="card">
+      <h3>Lean as judge</h3>
+      <p>The loop reads proved sentences, takes a step, and samples text. A text with no equation does not go to Lean. A new equation is checked as a theorem closed by rfl. An accepted new formula can receive a step. A rejection is stored and is not taught. No other model is called.</p>
+    </div>
+  </div>
+  <p>Weights and the database live under var/, which is not in git. Do not resume run-1, run-2, run-3, or run-4.</p>
+  <div class="foot"><span>champion stays the generator</span><span>02</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">What a run can show</p>
+  <h2>Loss, new equations, Lean's verdict. Not the learning flag.</h2>
+  <ul>
+    <li>Whether loss on the proved corpus falls through the writing gate, and whether it stays there after the corpus gets richer.</li>
+    <li>Whether sentences the model writes are new, and whether Lean accepts them.</li>
+    <li>Whether accepted ones get deeper, in the same syntactic sense as the generator, or stay bare equalities.</li>
+    <li>learning: yes is not one of those outcomes. The champion is champion-generator-v0. The held-out pair is 0 = 0 and the negation of 1 = 0, already scored 1.0. diversity and resource are the constants 1.</li>
+    <li>A good run of the model's own equations does not flip that flag. A bad run does not flip it either.</li>
+  </ul>
+  <div class="foot"><span>written 2026-10-12, while run-1 was open</span><span>03</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">Stages 0-8, all done</p>
+  <h2>The generator road, level by level.</h2>
+  <table>
+    <tr><th>Stage</th><th>Done when</th></tr>
+    <tr><td>0 analysis</td><td>Tools, Python versus Lean, directories, interface, and later criteria are known.</td></tr>
+    <tr><td>1 concrete arithmetic</td><td>Same seed, same file. Count includes zero. unique refuses a collision. Real Lean accepts. Timeout is not "false".</td></tr>
+    <tr><td>2 variables</td><td>Concrete, universal, assumptions, and an expression with no proof stay distinct. Generation is not truth.</td></tr>
+    <tr><td>3 wider AST</td><td>Every new construction has typing, export, and Lean tests. A forbidden type mix is an error.</td></tr>
+    <tr><td>4 registry</td><td>Stable ids. A missing dependency and a cycle are visible. Using an earlier theorem is not a new discovery.</td></tr>
+    <tr><td>5 complexity</td><td>Tree size, depth, variables, operators, dependencies, definitions. Numeral size is not the only difficulty.</td></tr>
+    <tr><td>6 definitions</td><td>A definition is checked, theorems are built from it, dependencies recorded, Lean passes.</td></tr>
+    <tr><td>7 hypotheses</td><td>Proved, refuted, unresolved, or rejected as bad syntax or type. No proof is not false. Repeats and diversity are measured.</td></tr>
+    <tr><td>8 exploration</td><td>Four templates. Lack of a proof, falsehood, and unprovability in the fragment stay different. No promise of full automation.</td></tr>
+  </table>
+  <div class="foot"><span>docs/stages.md</span><span>04</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">Stage evidence</p>
+  <h2>Seeds repeat. Statuses do not collapse into one word.</h2>
+  <div class="grid g2">
+    <div>
+      <ul>
+        <li>Stage 1 property probe: 100 seeds times 8 theorems, OK. Statuses: proved, failed, timeout, unavailable.</li>
+        <li>Stage 3 Lean: (Nat.succ 2) = 3 and ((1 : Int) + (-1 : Int)) = (0 : Int) end proved. An undeclared atom P errors.</li>
+        <li>Stage 5: when every add_zero candidate fits ast_size 5-5 and variables 0-0, seed 1 still gives ((8 + 0) = 8) and ((7 + 0) = 7).</li>
+        <li>Stage 6: test_definition_and_dependent_theorem gives proved.</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3>Stage 8, seed 1, count 4</h3>
+      <p>Order: proved, refuted, no_proof, unprovable_in_fragment. The set of four statuses is complete. proved in exploration means a registered lemma matches. The exported theorem still waits for Lean. That is not claimed_true.</p>
+    </div>
+  </div>
+  <div class="foot"><span>four templates, not an open sentence space</span><span>05</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">Stage 7</p>
+  <h2>A counterexample is checked before a declared proof.</h2>
+  <ul>
+    <li>proved: a proof was supplied and Lean verification has status proved.</li>
+    <li>A false 1 = 0 with a forged proved status stays refuted.</li>
+    <li>Lean for theorem witness : (0 &lt; 0) := by decide returns failed / proof, because the tactic showed the sentence is false.</li>
+    <li>Lack of a proof is not marked as false.</li>
+    <li>Stage 2: a generated sentence starts unverified. claimed_true is true only when a proof exists and Lean has marked the metadata copy proved. An expression with no proof does not get proved, even when the surrounding file compiles.</li>
+  </ul>
+  <div class="foot"><span>three meanings of proved stay apart</span><span>06</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">The four runs</p>
+  <h2>One database. Separate weights. None should be resumed.</h2>
+  <table>
+    <tr><th>Run</th><th>Decoder</th><th>Status</th><th>Headline</th></tr>
+    <tr><td>run-1</td><td>Argmax, one character, the largest logit</td><td>paused 2026-10-13</td><td>18,032 tries, 125 strings, Lean accepted 0</td></tr>
+    <tr><td>run-2</td><td>100 texts per step from the propose prompt, no repair</td><td>paused</td><td>No separate result note in docs/</td></tr>
+    <tr><td>run-3</td><td>20 samples, temperature 1, nucleus 0.9, then endings</td><td>paused 2026-10-14</td><td>200 cycles, 0 accepts, cursor did move</td></tr>
+    <tr><td>run-4</td><td>One-character hole in a generator sentence</td><td>paused 2026-10-15 14:01</td><td>185 accepts, every one the original (</td></tr>
+  </table>
+  <p>All four share var/learn.sqlite. Weights stay in var/lm/&lt;run-id&gt;/. Do not resume a closed run to continue an old decoder.</p>
+  <div class="foot"><span>do not commit weights</span><span>07</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">run-1 · what was running</p>
+  <h2>Greedy. Same prompt, same weights, same next character.</h2>
+  <ul>
+    <li>About 50 million parameters, context 512, no pretrained weights. Champion champion-generator-v0. learning was not set.</li>
+    <li>A turn started when ten losses in a row were under 0.45, or when the last 80 forward losses sat level.</li>
+    <li>Turn length followed the accepted share of the latest 20 finished tries. That share stayed at 0, so the turn stayed at the baseline: 40 tries, then 40 study steps.</li>
+    <li>A repeat spends one of those tries and does not go to Lean.</li>
+    <li>Paused 2026-10-13 by SIGTERM. Status in runs is paused.</li>
+  </ul>
+  <div class="foot"><span>var/lm/run-1/model.safetensors</span><span>08</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">run-1 · loss</p>
+  <h2>3.37 down to about 0.32, then back near 0.6.</h2>
+  <table>
+    <tr><th>Step</th><th>Median loss</th><th>Cursor</th></tr>
+    <tr><td>20</td><td>3.37, the first logged step</td><td>80</td></tr>
+    <tr><td>4,000-14,000</td><td>0.32-0.37</td><td>short generator sentences</td></tr>
+    <tr><td>about 18,000</td><td>steps up to about 0.59</td><td>about 77,000, longer equalities</td></tr>
+    <tr><td>76,000-78,000</td><td>0.61-0.63</td><td>past 150,000</td></tr>
+  </table>
+  <p>At the pause: step 79,812, epoch 1, cursor 154,977, replay id 101,191, last loss 0.668. The drop is the short prefix. The step up is longer equalities and longer names, whose fresh digits the model cannot predict. Writing opened because the curve was level, not because loss had fallen through 0.45 again.</p>
+  <div class="foot"><span>bands near 0.32 later are rereads</span><span>09</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">run-1 · what it wrote</p>
+  <h2>125 names. No equals sign.</h2>
+  <div class="grid g3">
+    <div class="card"><p class="num">18,032</p><p class="lbl">finished tries</p></div>
+    <div class="card"><p class="num">125</p><p class="lbl">distinct strings</p></div>
+    <div class="card"><p class="num rust">0</p><p class="lbl">Lean accepted</p></div>
+  </div>
+  <table style="margin-top:18px">
+    <tr><th>Verdict</th><th>Count</th></tr>
+    <tr><td>Repeated something already in the run</td><td>17,907</td></tr>
+    <tr><td>Not a valid formula</td><td>125</td></tr>
+    <tr><td>Lean accepted, could not prove, refuted, or waiting</td><td>0, 0, 0, 0</td></tr>
+  </table>
+  <div class="foot"><span>accepted share 0 / 18,032</span><span>10</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">run-1 · the names</p>
+  <h2>The most common string appeared 9,200 times.</h2>
+  <p class="lead">gen_s6 followed by a run of the digit 1. The others are the same shape with a different digit, or a short prefix and then a run of zeros. None contains = or :=.</p>
+  <ul>
+    <li>Each distinct string was sent to Lean once, rejected as not a formula, and every later copy was a repeat.</li>
+    <li>The last 10-minute windows matched: a few hundred repeats, one not-a-formula, zero accepted. The share was not drifting.</li>
+    <li>Generator pile at the pause: 151,301 candidates proved, 3,551 unresolved, 125 ill_formed (the model's names). Historical failed propose jobs: 8,637, unchanged through writing. Curriculum level 7.</li>
+    <li>Argmax never asks whether a smaller logit would have started an equation. That measurement stayed unread.</li>
+  </ul>
+  <div class="foot"><span>more turns copy the same names</span><span>11</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">run-2, the unread middle</p>
+  <h2>A hundred draws. No repair. No result note.</h2>
+  <ul>
+    <li>Ready after run-1, not the measured close. Start command in the run-1 note: python3 -m theorem_gen.learn start --run-id run-2 --until-pause --lm --probe --lean-workers 4.</li>
+    <li>New weights in var/lm/run-2/. Same database. run-1 stays paused.</li>
+    <li>Rhythm: one training step on four proved sentences, then one hundred texts, then one extra argmax stored apart.</li>
+    <li>Decoder for the hundred: temperature 1, nucleus top-p 0.9. The number that says the hundred was a search is how many of the hundred differ. Near 1 means a single mode.</li>
+    <li>The model was to stop after 200 cycles. docs/ has no separate result note. The README calls it paused. Do not resume it.</li>
+  </ul>
+  <div class="foot"><span>do not reset the sqlite file</span><span>12</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">run-3 · the rhythm</p>
+  <h2>Twenty formulas, then up to two rounds of four endings.</h2>
+  <ul>
+    <li>New run, new weights. Prompt &lt;|propose|&gt;. Temperature 1, nucleus 0.9. One argmax line stored apart, not in the verdict table.</li>
+    <li>One training step on up to four proved generator sentences. The model did not write until it had taken one step on sentences Lean had already accepted.</li>
+    <li>While more than 128 proved sentences sat ahead of the first read, the generator opened no new batch.</li>
+    <li>A text with no equation is not a formula. A repeat stays in the run. A new equation goes to Lean as theorem model_eq : … := rfl.</li>
+    <li>If none of the twenty was accepted, four endings continue from the formula Lean had read furthest into. A second four opens only when one ending gets strictly further. No third round. The rfl is stapled by the loop.</li>
+  </ul>
+  <div class="foot"><span>200 cycles, then writing stops</span><span>13</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">run-3 · pause</p>
+  <h2>Step 18,404 is mostly study, not formulas.</h2>
+  <div class="grid g3">
+    <div class="card"><p class="num">200</p><p class="lbl">cycles, 0 through 199</p></div>
+    <div class="card"><p class="num">5,496</p><p class="lbl">finished sample tries</p></div>
+    <div class="card"><p class="num">5,318</p><p class="lbl">distinct strings, samples plus argmax</p></div>
+  </div>
+  <p style="margin-top:20px">At the pause: step 18,404, epoch 1, cursor 188,274, replay id 172,020, last loss 0.661, phase done, cycles 200. While writing, loss at step 200 was about 1.09. The fall to about 0.66 is the first read, then the replay, of generator sentences. It is not evidence that the formulas improved. Formula rows stop at step 200. After the pause the process was resumed only to keep reading. 9,319 proved sentences sat ahead of the cursor. Those steps added no formula rows.</p>
+  <div class="foot"><span>paused 2026-10-14, SIGTERM</span><span>14</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">run-3 · verdicts</p>
+  <h2>The draw searched. Lean accepted none.</h2>
+  <table>
+    <tr><th>Verdict, samples only</th><th>Count</th></tr>
+    <tr><td>Repeated something already in the run</td><td>139</td></tr>
+    <tr><td>Not a valid formula</td><td>4,868</td></tr>
+    <tr><td>Lean could not prove it</td><td>489</td></tr>
+    <tr><td>Lean accepted, refuted, or waiting</td><td>0, 0, 0</td></tr>
+  </table>
+  <p>Of those 489, the stored failure class is other on 481: Lean rejected the file as syntax, and the classifier does not name that phrase, so the dashboard says the proof failed. The failure class is proof on 8 rows. Those eight are the only texts Lean elaborated far enough to complain about the mathematics. The 200 argmax lines: 121 repeats, 69 not a formula, 10 unresolved, 0 accepted.</p>
+  <div class="foot"><span>not the name loop of run-1</span><span>15</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">The eight mathematical complaints</p>
+  <h2>One real comparison. rfl cannot close it.</h2>
+  <table>
+    <tr><th>Step</th><th>Ply</th><th>Text</th><th>Lean</th></tr>
+    <tr><td>7</td><td>0</td><td>cmt52b2=b</td><td>not a definitional equality</td></tr>
+    <tr><td>62</td><td>1</td><td>ht=_0me0024go02020t</td><td>not a definitional equality</td></tr>
+    <tr><td>62</td><td>2</td><td>ht=_0me0024g00o</td><td>not a definitional equality</td></tr>
+    <tr><td>69</td><td>0</td><td>8=_n</td><td>not a definitional equality</td></tr>
+    <tr><td>70</td><td>1</td><td>h0=oe *5001 * 3</td><td>not a definitional equality</td></tr>
+    <tr><td>148</td><td>1</td><td>theoreorem gen_s1101…</td><td>function expected</td></tr>
+    <tr><td>156</td><td>0</td><td>theoreorem gen_s10010014014 = by</td><td>function expected</td></tr>
+    <tr><td>196</td><td>1</td><td>(1) &lt;= (5)</td><td>rfl closes an equality, and this is &lt;=</td></tr>
+  </table>
+  <div class="foot"><span>(1) &lt;= (5) was not accepted</span><span>16</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">Did an ending get further</p>
+  <h2>The cursor moved. Acceptance did not.</h2>
+  <table>
+    <tr><th></th><th>Cycles</th></tr>
+    <tr><td>Opening cycles</td><td>200</td></tr>
+    <tr><td>Lean's error sat inside an opening</td><td>196</td></tr>
+    <tr><td>An ending was drawn</td><td>196</td></tr>
+    <tr><td>First ending read further than that opening</td><td>178</td></tr>
+    <tr><td>Second ending read further than the first</td><td>152</td></tr>
+  </table>
+  <p>Furthest character counts: opening 58 among unresolved rows and 94 among rows that are not formulas; first ending 123; second ending 154. The long ones are runs of the same letter, such as eeee…, which Lean treats as one token and then rejects. Openings were 4,000 sample rows. First endings 784. Second endings 712. error_at is characters read before the error, not distance to a true equation.</p>
+  <div class="foot"><span>weights held still inside the cycle</span><span>17</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">run-3 · limits</p>
+  <h2>Diverse text. No proof. No new champion.</h2>
+  <ul>
+    <li>The draw was diverse: thousands of distinct strings, not one looped name.</li>
+    <li>Lean's cursor entered the formula in 196 of 200 cycles. The repair branch was not idle.</li>
+    <li>Keeping the letters and redrawing the tail moved that cursor further, inside one cycle, in 178 cycles at the first ending and in 152 at the second.</li>
+    <li>No ending was accepted. No opening was accepted. A longer prefix is usually a longer run of junk.</li>
+    <li>The proof on these files would have been the stapled rfl. The model did not write it. After cycle 200 it only reads generator sentences. learning stays off.</li>
+  </ul>
+  <div class="foot"><span>champion-generator-v0</span><span>18</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">run-4 · the hole</p>
+  <h2>Replace one character. Only a character Lean accepts is taught.</h2>
+  <div class="grid g3">
+    <div class="card"><p class="num">200</p><p class="lbl">cycles, hole finished</p></div>
+    <div class="card"><p class="num">185</p><p class="lbl">sample accepts</p></div>
+    <div class="card"><p class="num rust">0</p><p class="lbl">accepts of a different character</p></div>
+  </div>
+  <p style="margin-top:22px">The model may replace only the broken character of a generator sentence proved by rfl. Twenty guesses and one argmax are checked as theorem model_eq : {body} := rfl. Every accept was the original parenthesis. Started 2026-10-14. The user stopped the run on 2026-10-15 14:01. Status paused. The hole part is finished. The rest of the note watches study after that.</p>
+  <div class="foot"><span>restoring ( is not a new sentence</span><span>19</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">What the 90-minute check counted</p>
+  <h2>Training up, difficulty up, or a freeze.</h2>
+  <ul>
+    <li>Training up: lm_state.step increased and last_loss is lower than the previous check.</li>
+    <li>Difficulty up: curriculum level rose, or the latest proved generate rows have a higher mean depth or size. Hard caps already seen: depth 3 and size 9 for generate, depth 6 for richgen.</li>
+    <li>Maximum: curriculum level 7 with its gate passed, or the generators are on those caps and the general surface cannot grow.</li>
+    <li>Level 2 asks for 1000 evaluated generate_general rows. That generator had 9 fixed statements, so level 7 was not reachable without a new generator. The 1000 gate was not lowered.</li>
+    <li>The approach works only if, at that maximum, the model has a Lean-accepted sentence that is not the original character put back and not a copy of a generator line.</li>
+  </ul>
+  <div class="foot"><span>checks every 90 minutes</span><span>20</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">run-4 checks, night</p>
+  <h2>A reset, then a fresh loss of 5.6.</h2>
+  <table>
+    <tr><th>When</th><th>Step</th><th>Loss</th><th>Reading</th></tr>
+    <tr><td>10-14 23:01</td><td>10768</td><td>0.467</td><td>Level 2. Late depth 2.77, cap 3. General rows: 9. Training up.</td></tr>
+    <tr><td>10-14 23:06</td><td>11000</td><td>0.528</td><td>Replay off. A caught-up cursor waits. A flat step is that wait.</td></tr>
+    <tr><td>10-15 00:22</td><td>0</td><td></td><td>Weights in var/lm/run-4/ removed. 17991 proved sentences kept. Other runs untouched.</td></tr>
+    <tr><td>10-15 00:37</td><td>1092</td><td>0.832</td><td>Fresh start. First loss was 5.6. Cursor 193653. About 13600 proved still ahead.</td></tr>
+    <tr><td>10-15 02:07</td><td>5657</td><td>0.743</td><td>First read finished. Unread 0. Cursor 209463. Depth 2.90.</td></tr>
+    <tr><td>10-15 03:37</td><td>7720</td><td>0.613</td><td>About 391 new sentences in 10 minutes. Size 8.1. No new character.</td></tr>
+  </table>
+  <div class="foot"><span>phase stays done, so it does not guess again</span><span>21</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">run-4 checks, morning</p>
+  <h2>Level 7 arrived at 09:37. Loss did not buy a new character.</h2>
+  <table>
+    <tr><th>When</th><th>Step</th><th>Loss</th><th>Level</th><th>General rows</th></tr>
+    <tr><td>05:07</td><td>9624</td><td>0.645</td><td>2</td><td>9, depth still on the cap</td></tr>
+    <tr><td>06:37</td><td>11399</td><td>0.583</td><td>2</td><td>9, loss eased from 0.645</td></tr>
+    <tr><td>08:07</td><td>13036</td><td>0.604</td><td>2</td><td>9, mean depth now 3.0, size 8.2</td></tr>
+    <tr><td>08:25</td><td></td><td></td><td>2</td><td>Gate stuck on 9 statements. Later copies add a numeral. Gate stays 1000.</td></tr>
+    <tr><td>09:37</td><td>16451</td><td>0.457</td><td>7</td><td>9296 proved. Cursor 232976.</td></tr>
+    <tr><td>11:07</td><td>19958</td><td>0.345</td><td>7</td><td>20196. Cursor 244359.</td></tr>
+    <tr><td>12:37</td><td>23766</td><td>0.437</td><td>7</td><td>32165. Loss rose from 0.345. About 1549 new sentences in 10 minutes.</td></tr>
+    <tr><td>14:01</td><td>27288</td><td>0.284</td><td>7</td><td>Stopped. Cursor 268380. Phase done.</td></tr>
+  </table>
+  <div class="foot"><span>no dashboard left on port 8765</span><span>22</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">run-4 verdict</p>
+  <h2>Curriculum reached the top. The writing approach did not.</h2>
+  <p class="lead">Level 7, the top of this program, was reached at 09:37 after general sentences started to vary. 9296 of them were proved at that check. The 1000 gate was not lowered. Concrete generate rows stay depth 3 and size at most 9. Loss on the fresh read was about 0.46. The model was not rereading.</p>
+  <p>That does not make the writing approach work. The only Lean-accepted sentences the model wrote are the 185 hole guesses that put the parenthesis back. None replaced it with a different character. Since the fresh start the model only reads, so the new general sentences train it. They do not add a sentence Lean accepts that the generator did not already write.</p>
+  <div class="foot"><span>stopped 2026-10-15 14:01</span><span>23</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">Side by side</p>
+  <h2>Every learning approach, and what Lean kept.</h2>
+  <table>
+    <tr><th>Approach</th><th>Scale</th><th>Lean kept from the model</th></tr>
+    <tr><td>Generator, stages 0-8</td><td>Same seed, same file. 100 x 8 probe OK.</td><td>The generator's own files, when the check says proved.</td></tr>
+    <tr><td>run-1 argmax</td><td>79,812 steps, 18,032 tries</td><td>Nothing. 125 names, no equation.</td></tr>
+    <tr><td>run-2 probe</td><td>100 texts, temperature 1, top-p 0.9</td><td>No result note. Do not resume.</td></tr>
+    <tr><td>run-3 repair</td><td>200 cycles, 5,496 samples, endings to 154 characters</td><td>Nothing. 8 rows reached a mathematical complaint.</td></tr>
+    <tr><td>run-4 hole</td><td>200 cycles, then study to step 27,288</td><td>185 copies of the original parenthesis.</td></tr>
+  </table>
+  <div class="foot"><span>var/ stays out of the tree</span><span>24</span></div>
+</section>
+
+<section class="slide">
+  <p class="kicker">Close</p>
+  <h1>The judge worked. The writers did not clear it.</h1>
+  <p class="lead">Stages 0 through 8 can emit a file Lean accepts, from a seed, with proved, refuted, unresolved, and ill-formed kept apart. The four learning runs share one database and never taught a new equation. The champion is still the generator. Do not resume the runs. Do not add the weight files.</p>
+  <div class="foot"><span>theorem gen</span><span>25</span></div>
+</section>
+
+</div></div>
+<div class="deck-controls" id="hud">arrows or space · 1 / 25</div>
+<script>
+(function () {
+  const stage = document.getElementById('stage');
+  const slides = Array.from(document.querySelectorAll('.slide'));
+  let i = 0;
+  function fit() {
+    const s = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+    const x = (window.innerWidth - 1920 * s) / 2;
+    const y = (window.innerHeight - 1080 * s) / 2;
+    stage.style.transform = 'translate(' + x + 'px,' + y + 'px) scale(' + s + ')';
+  }
+  function show(n) {
+    i = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach((el, k) => el.classList.toggle('active', k === i));
+    document.getElementById('hud').textContent = 'arrows or space · ' + (i + 1) + ' / ' + slides.length;
+  }
+  window.addEventListener('resize', fit);
+  window.addEventListener('keydown', (e) => {
+    if (['ArrowRight', 'PageDown', ' '].includes(e.key)) { e.preventDefault(); show(i + 1); }
+    if (['ArrowLeft', 'PageUp', 'Backspace'].includes(e.key)) { e.preventDefault(); show(i - 1); }
+    if (e.key === 'Home') show(0);
+    if (e.key === 'End') show(slides.length - 1);
+  });
+  fit();
+  show(0);
+})();
+</script>
+</body>
+</html>

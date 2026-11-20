@@ -1,0 +1,3 @@
+# Python 3.9 or newer, as named in README.md and docs/stage-0.md.
+# The README and docs do not name a third-party Python package.
+# Lean 4.34.1 and Lake 5.0.0 are a toolchain, not a pip dependency.

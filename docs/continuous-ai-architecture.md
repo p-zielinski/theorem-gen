@@ -1,11 +1,11 @@
 # Continuous loop: generation, Lean, SQLite
 
 > Last updated: 2026-10-12
-> Code: `theorem_gen/learn/`. Schema: `docs/continuous-ai-schema.sql` (migrations 001–013, concatenated in that order).
+> Code: `theorem_gen/learn/`. Schema: `docs/continuous-ai-schema.sql` (migrations 001-013, concatenated in that order).
 
 This is the memory of an experiment and a scheduler. In the same process a transformer of about 50 million parameters can train from scratch. `learning: no` stays until a saved champion beats the fixed baseline on held-out and contributes a measurement other than the constant pair `diversity=1` / `resource=1`. A growing row count, or a transformer step, does not do that. The system does not solve an arbitrary hypothesis and does not keep three copies of weights in RAM.
 
-Stages 0–8 remain the base. `python3 -m theorem_gen generate` still produces concrete theorems about `Nat`. The loop does not rewrite them.
+Stages 0-8 remain the base. `python3 -m theorem_gen generate` still produces concrete theorems about `Nat`. The loop does not rewrite them.
 
 ## Three roles do not remove hallucinations
 
@@ -51,14 +51,14 @@ One process. One role slot. Lean checks run in a pool of processes, and writes s
 | `checkpoint.py` | Atomic snapshot of the file and the `known_good` row. |
 | `classify.py` | Status from validations only. |
 | `validate.py` | Adapter over `theorem_gen.verify`. Rejects imports and forbidden constructions before the process starts. |
-| `batches.py` | Levels 1–7. Level 1 calls the existing `generate()`. |
+| `batches.py` | Levels 1-7. Level 1 calls the existing `generate()`. |
 | `curriculum.py` | Promotion gate. A training metric is not an input. |
 | `roles.py` | Prompts and retrieval of `stable_id` / status / family only. |
 | `policy.py` | Baseline, challenger, training corpus. No weight training. |
 | `engine.py` | Start, pause, resume, replay. |
 | `memory.py` | RSS of this process. The historical measurement had no weights. |
 | `minilm.py` | A transformer from scratch, role prefixes, equation samples. |
-| `effort.py` | Effort level 1–4 and the Lean time band. |
+| `effort.py` | Effort level 1-4 and the Lean time band. |
 | `dashboard.py` | A read-only page. |
 | `__main__.py` | CLI. |
 
@@ -74,7 +74,7 @@ Only `recompute` rewrites a candidate's status, and only from `validations` rows
 
 ## Pause, resume, checkpoint
 
-The default interval is 300 s. The allowed range is only 300–600 s. `True` and a floating-point number are rejected.
+The default interval is 300 s. The allowed range is only 300-600 s. `True` and a floating-point number are rejected.
 
 A checkpoint is written at start, pause, curriculum promotion, model promotion (`Engine.promote_model`), and when the interval elapses. `SIGINT` / `SIGTERM` set a pause request; the loop finishes the step, releases leases, and publishes the pause checkpoint.
 
@@ -155,17 +155,17 @@ The small vector in `online_weights` is counted separately and is not this netwo
 
 ## Effort and the page
 
-Levels 1–4 describe this fragment, not mathematics in general. `decide` on a small tree is 1. `rfl` is 2, and at `ast_size` ≥ 8 or `depth` ≥ 3 it moves to 3. `lemma` is 3. `rewrite`, `ast_size` ≥ 12, or `depth` ≥ 4 is 4. The size of a literal does not raise the level. `proof_method = model` has no AST tree in `ast_size`, so it gets no such grade.
+Levels 1-4 describe this fragment, not mathematics in general. `decide` on a small tree is 1. `rfl` is 2, and at `ast_size` ≥ 8 or `depth` ≥ 3 it moves to 3. `lemma` is 3. `rewrite`, `ast_size` ≥ 12, or `depth` ≥ 4 is 4. The size of a literal does not raise the level. `proof_method = model` has no AST tree in `ast_size`, so it gets no such grade.
 
 `validations.lean_ms` is the wall time of one check. Bands: under 100 ms, up to 500 ms, up to 2 s, above. Rows from before migration 008 have `NULL`.
 
-`python3 -m theorem_gen.learn dashboard --run-id RUN` serves `http://127.0.0.1:8765/` and reads the database read-only. It does not run migrations and it is not a second writer. The first cards count own equations Lean accepted, and that count over the ones already judged. The latest sentences are listed with `model_attempts.lm_step` and `loss` from migration 012, stored when the equation was written. A chart plots the accepted share at every judged equation: the last 10, the share from the first, and a Wilson bar for each block of 20. A second bar is the nesting depth of the accepted equations in that block. Depth 1, including a large numeral, is the low band. Depth 2 is the middle band. Depth 3 and above share the top band. Freedom is the latest block of 20, not a memory of earlier blocks. The baseline is 40 equations then 40 study steps. Every try spends one of those places, including a repeat. The accepted share of the latest block is the coefficient for the next turn. A lower Wilson bound above one half uses 80 equations and 20 study steps. Above three quarters it is 160 and 10. At or below one half the next block returns to the baseline at once. A depth-credit lower bound above three quarters adds one step only while the share is already above one half. No finished block leaves the baseline in place. How long Lean took is not an input. The 1–4 grade is the generator table only. A model row stores no proof kind, so it is not in that table. Whether a model sentence is valid is the verdict table at the top of the page. A Lean job whose state is done means the check finished, not that the equation was accepted. Migration 013 stores the measurement the chart below the share uses: `expr_depth`, `expr_operators`, and `expr_size`, taken from the equation text at the moment of writing with the same counts as `complexity.py`. NULL means the text is not a statement of this fragment. The depth chart is the mean of accepted equations, last 10 and from the first, and a 95% Student interval on each block of 20. The operator chart is the same population. The table below still compares the last 10 minutes with the 10 before. Rows still waiting for Lean stay out of that share. "New material" counts `proved` sentences the first read has not reached. Replay of sentences already behind the cursor is not in that number. "May write" shows the stage: how many recent updates in a row are under 0.45, out of 10, or Yes, Studying, Waiting, or No.
+`python3 -m theorem_gen.learn dashboard --run-id RUN` serves `http://127.0.0.1:8765/` and reads the database read-only. It does not run migrations and it is not a second writer. The first cards count own equations Lean accepted, and that count over the ones already judged. The latest sentences are listed with `model_attempts.lm_step` and `loss` from migration 012, stored when the equation was written. A chart plots the accepted share at every judged equation: the last 10, the share from the first, and a Wilson bar for each block of 20. A second bar is the nesting depth of the accepted equations in that block. Depth 1, including a large numeral, is the low band. Depth 2 is the middle band. Depth 3 and above share the top band. Freedom is the latest block of 20, not a memory of earlier blocks. The baseline is 40 equations then 40 study steps. Every try spends one of those places, including a repeat. The accepted share of the latest block is the coefficient for the next turn. A lower Wilson bound above one half uses 80 equations and 20 study steps. Above three quarters it is 160 and 10. At or below one half the next block returns to the baseline at once. A depth-credit lower bound above three quarters adds one step only while the share is already above one half. No finished block leaves the baseline in place. How long Lean took is not an input. The 1-4 grade is the generator table only. A model row stores no proof kind, so it is not in that table. Whether a model sentence is valid is the verdict table at the top of the page. A Lean job whose state is done means the check finished, not that the equation was accepted. Migration 013 stores the measurement the chart below the share uses: `expr_depth`, `expr_operators`, and `expr_size`, taken from the equation text at the moment of writing with the same counts as `complexity.py`. NULL means the text is not a statement of this fragment. The depth chart is the mean of accepted equations, last 10 and from the first, and a 95% Student interval on each block of 20. The operator chart is the same population. The table below still compares the last 10 minutes with the 10 before. Rows still waiting for Lean stay out of that share. "New material" counts `proved` sentences the first read has not reached. Replay of sentences already behind the cursor is not in that number. "May write" shows the stage: how many recent updates in a row are under 0.45, out of 10, or Yes, Studying, Waiting, or No.
 
 ## Lean validation
 
 The toolchain is read from `lean/lean-toolchain` and stored as text and sha256. Each candidate gets its own temporary file. A proof or `check` source must have the hash recorded in a `bound_source` event in the same transaction as the proposal. A different file does not get `accepted`. A counterexample is recomputed from that candidate's assignment and claim; a substituted negation of someone else's sentence does not pass. One bad file marks that job `failed` and does not stop the queue. The result `unavailable` (no `lake`) stores no validation: the job returns to the queue, the run pauses, and the CLI exits with an error. Otherwise the idempotency key would close the candidate forever as `unresolved`. A counterexample is a separate `verify_source` call on `theorem cert_… : Not <claim> := by decide`.
 
-The limits stay in `theorem_gen.verify`: wall clock, `RLIMIT_CPU`, killing the process group, truncating stdout/stderr. `RLIMIT_AS` does not work on this macOS/CPython and is not worked around here. The adapter also rejects `import` and `#eval`, `run_io`, `run_cmd`, `sorry`, `unsafe`, `axiom`, `opaque` before it calls the runner. The list in stage 0–8 `verify.py` did not gain `import`, so the old verdict would not change.
+The limits stay in `theorem_gen.verify`: wall clock, `RLIMIT_CPU`, killing the process group, truncating stdout/stderr. `RLIMIT_AS` does not work on this macOS/CPython and is not worked around here. The adapter also rejects `import` and `#eval`, `run_io`, `run_cmd`, `sorry`, `unsafe`, `axiom`, `opaque` before it calls the runner. The list in stage 0-8 `verify.py` did not gain `import`, so the old verdict would not change.
 
 ## CLI
 

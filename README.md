@@ -1,12 +1,58 @@
 # Theorem Gen
 
-An experiment: can a language model, trained only on sentences Lean has accepted, start to write new ones of its own? Lean is the only judge. What Lean accepts can be taught back. What it rejects never enters the weights.
+Theorem Gen is a local experiment about formal sentences in Lean 4. It keeps two approaches apart. A deterministic generator writes a Lean file from a seed. A separate learning loop trains only on sentences Lean has already accepted, asks the model to write, and sends that writing back to Lean.
 
-The greedy run `run-1` is closed. Argmax wrote 125 names and no equation. The numbers are `docs/run-1-greedy-result.md`. Its weights stay in `var/lm/run-1/`. Its rows stay in `var/learn.sqlite`. Do not resume it.
+Lean is the only judge in the loop. What Lean accepts can be taught back. What it rejects never enters the weights.
 
-`run-2` is paused. It drew a hundred texts per step from `<|propose|>` and did not repair them. Its weights stay in `var/lm/run-2/`. Do not resume it.
+A long browser deck of the stages and the four runs is [docs/runs-story.html](docs/runs-story.html).
 
-`run-3` is closed. Two hundred cycles of twenty formulas and up to two rounds of four endings produced no text Lean accepted. The numbers are `docs/run-3-repair-result.md`. Its weights stay in `var/lm/run-3/`. Do not resume it.
+The Python package is `theorem_gen`. Commands run from the repository root with Python 3.9 or newer. Lean 4.34.1 and Lake 5.0.0 come through elan. The repository pins that toolchain in `lean/lean-toolchain`. The loop database and the weight files live under `var/`, which is not part of the git tree. A stranger can read the generator without ever starting a run.
+
+## Two approaches
+
+### Deterministic generator
+
+Stages 0-8 are implemented. The generator builds a theorem as a tree, exports Lean syntax, and can ask Lean to check the finished file. The same seed produces the same sentences. That file is not the model's corpus, and this road has no loop database.
+
+The default CLI builds concrete theorems about `Nat`. A second generator, `theorem_gen.richgen`, prints equalities with variables. The same package also has general sentences (`generate_general`), the `double` definition, hypothesis assessment (`assess_hypothesis`), and exploration of four templates (`explore`). Commands, the three meanings of the word `proved`, and the expected Lean ending are in [Generator](#generator) below. Module boundaries are in [docs/architecture.md](docs/architecture.md). Stage reports are [docs/stage-0.md](docs/stage-0.md) through [docs/stage-8.md](docs/stage-8.md). Completion criteria are [docs/stages.md](docs/stages.md).
+
+### Lean as the judge
+
+The learning loop is a different process. It reads proved sentences from the generator, takes a training step, and samples text from the weights. A text with no equation does not go to Lean. A new equation is checked as a theorem closed by `rfl`. An accepted new formula can receive a training step. A rejection is stored and is not taught.
+
+No other model is called. The network is a transformer trained from scratch, about 50 million parameters, context 512 tokens. The rhythm, statuses, gates, queue, and model slot are [docs/continuous-ai-architecture.md](docs/continuous-ai-architecture.md). The schema is [docs/continuous-ai-schema.sql](docs/continuous-ai-schema.sql). What any run of this loop can and cannot show is [docs/what-the-run-can-show.md](docs/what-the-run-can-show.md). Commands actually run for the first delivery of the loop are [docs/continuous-ai-report.md](docs/continuous-ai-report.md).
+
+## Which runs matter
+
+Four run ids share `var/learn.sqlite`. Weights for each run stay in `var/lm/<run-id>/`. Do not resume a closed run, and do not resume a paused run in order to continue an old decoder.
+
+### run-1, greedy, closed
+
+`run-1` is closed. The sampler takes the character with the largest logit, so the same prompt and the same weights always continue with the same character. Argmax wrote 125 names and no equation. The result note records 18,032 finished tries and 125 distinct strings. None contains `=` or `:=`. Lean accepted 0. The numbers are [docs/run-1-greedy-result.md](docs/run-1-greedy-result.md). Its weights stay in `var/lm/run-1/`. Do not resume it.
+
+### Later runs
+
+`run-2` is paused. It drew a hundred texts per step from `<|propose|>` and did not repair them. Its weights stay in `var/lm/run-2/`. Do not resume it. `docs/` has no separate result note for `run-2`.
+
+`run-3` is closed. It was a new run and a new set of weights. Two hundred cycles of twenty formulas and up to two rounds of four endings produced no text Lean accepted. Endings moved the column. The numbers are [docs/run-3-repair-result.md](docs/run-3-repair-result.md). What that repair run can and cannot show is [docs/run-3-repair-can-show.md](docs/run-3-repair-can-show.md). Its weights stay in `var/lm/run-3/`. Do not resume it.
+
+[The measurement](#the-measurement) below is the record of how `run-3` was started and what one cycle did.
+
+### run-4, the current hole
+
+`run-4` breaks one character of a generator sentence proved by `rfl`. The model may replace only that character. Twenty guesses and one argmax are checked as `theorem model_eq : {body} := rfl`. Only a character Lean accepts is taught. Weights go to `var/lm/run-4/`.
+
+The hole part is finished: 200 cycles, 185 sample accepts, every one the original `(`, none a different character. The user stopped the run on 2026-10-15 14:01. Status in `runs` is `paused`. Do not resume `run-4`. The checks and the verdict are [docs/run-4-observations.md](docs/run-4-observations.md).
+
+The command that started that hole run:
+
+```sh
+export ELAN_HOME="$PWD/.toolchains/elan"
+export PATH="$ELAN_HOME/bin:$PATH"
+python3 -m theorem_gen.learn start --run-id run-4 --until-pause --lm --hole --lean-workers 4
+```
+
+Do not resume `run-1`, `run-2`, or `run-3`.
 
 ## The measurement
 
@@ -61,7 +107,7 @@ FROM model_attempts WHERE run_id='run-3' ORDER BY id;
 
 ## Generator
 
-A separate road, with no loop database. Stages 0–8 are implemented. The default CLI builds concrete theorems about `Nat` and can ask Lean to check the file. That file is not the model's corpus.
+A separate road, with no loop database. Stages 0-8 are implemented. The default CLI builds concrete theorems about `Nat` and can ask Lean to check the file. That file is not the model's corpus.
 
 Python 3.9+. Lean 4.34.1 and Lake 5.0.0 through elan. The repository pins the version in `lean/lean-toolchain`. If `elan` is not installed, a local toolchain can be created without changing the user's `PATH`:
 
@@ -138,16 +184,19 @@ lake build
 
 ## Documentation
 
-- `docs/run-1-greedy-result.md` — the closed argmax run
-- `docs/run-3-repair-can-show.md` — what the repair run can and cannot show
-- `docs/run-3-repair-result.md` — the closed repair run: endings moved the column, Lean accepted nothing
-- `docs/what-the-run-can-show.md` — what a run of this loop can and cannot show
-- `docs/continuous-ai-architecture.md` — the loop, statuses, gates, queue, model
-- `docs/continuous-ai-schema.sql` — the SQLite schema
-- `docs/continuous-ai-report.md` — commands actually run for that delivery
-- `docs/prompts/build-continuous-lean-ai.md` — prompt for the continuous loop
-- `docs/stage-0.md` — environment and technical decisions for the generator
-- `docs/architecture.md` — modules and the verification contract
-- `docs/stage-1.md` … `docs/stage-8.md` — generator stage reports
-- `docs/stages.md` — completion criteria for stages 0–8
-- `docs/prompts/audit-lean-generator.md` — prompt for an independent audit of stages 0–8
+- [docs/run-1-greedy-result.md](docs/run-1-greedy-result.md): the closed argmax run
+- [docs/run-3-repair-can-show.md](docs/run-3-repair-can-show.md): what the repair run can and cannot show
+- [docs/run-3-repair-result.md](docs/run-3-repair-result.md): the closed repair run: endings moved the column, Lean accepted nothing
+- [docs/run-4-observations.md](docs/run-4-observations.md): hole-run checks after the 200 cycles, and the stop
+- [docs/what-the-run-can-show.md](docs/what-the-run-can-show.md): what a run of this loop can and cannot show
+- [docs/continuous-ai-architecture.md](docs/continuous-ai-architecture.md): the loop, statuses, gates, queue, model
+- [docs/continuous-ai-memory.md](docs/continuous-ai-memory.md): memory and resident-copy notes
+- [docs/continuous-ai-audit.md](docs/continuous-ai-audit.md): audit notes for the loop
+- [docs/continuous-ai-schema.sql](docs/continuous-ai-schema.sql): the SQLite schema
+- [docs/continuous-ai-report.md](docs/continuous-ai-report.md): commands actually run for that delivery
+- [docs/prompts/build-continuous-lean-ai.md](docs/prompts/build-continuous-lean-ai.md): prompt for the continuous loop
+- [docs/stage-0.md](docs/stage-0.md): environment and technical decisions for the generator
+- [docs/architecture.md](docs/architecture.md): modules and the verification contract
+- [docs/stage-1.md](docs/stage-1.md) through [docs/stage-8.md](docs/stage-8.md): generator stage reports
+- [docs/stages.md](docs/stages.md): completion criteria for stages 0-8
+- [docs/prompts/audit-lean-generator.md](docs/prompts/audit-lean-generator.md): prompt for an independent audit of stages 0-8

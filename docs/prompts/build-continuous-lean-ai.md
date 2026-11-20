@@ -18,7 +18,7 @@ Do not promise full automation or that it "will solve every hypothesis".
 
 ## Existing code to keep
 
-- Treat stages 0–8 as the base ONLY after a green audit with lake
+- Treat stages 0-8 as the base ONLY after a green audit with lake
   (not incomplete_without_lean). Otherwise fix the base first
   or run docs/prompts/audit-lean-generator.md.
 - Python builds a typed AST; Lean 4.34.1 checks proofs (no Mathlib).
@@ -44,12 +44,12 @@ but not as mathematical validation.
 
 Every candidate ends in exactly one status derived from evidence:
 
-1. proved — Lean accepted a complete proof (no sorry).
-2. refuted — Lean accepted a proof that the instantiated sentence is false
+1. proved: Lean accepted a complete proof (no sorry).
+2. refuted: Lean accepted a proof that the instantiated sentence is false
    (a counterexample certificate), not a Python heuristic by itself.
-3. unresolved — no accepted proof and no certified counterexample;
+3. unresolved: no accepted proof and no certified counterexample;
    includes timeout, a failed search, no witness inside the bound, role agreement without Lean.
-4. ill_formed — an AST/type error or Lean syntax/typing.
+4. ill_formed: an AST/type error or Lean syntax/typing.
    Mapping from the existing assess_hypothesis:
    invalid_syntax | invalid_type → ill_formed;
    proved | refuted | unresolved keep their meaning.
@@ -62,7 +62,7 @@ Rules:
 - Python find_counterexample may propose a witness; refuted only after a Lean certificate.
 - Reject: sorry, axiom, opaque, unsafe, #eval, run_io, run_cmd, unapproved imports.
 
-## Phase 0 — architecture before code
+## Phase 0: architecture before code
 
 Before you write an implementation, record:
 - docs/continuous-ai-architecture.md
@@ -73,34 +73,34 @@ Before you write an implementation, record:
 
 Only then TDD and code.
 
-## Phase 1 — SQLite immediately (a minimal schema, not an archive)
+## Phase 1: SQLite immediately (a minimal schema, not an archive)
 
 Use SQLite with WAL, foreign keys, busy_timeout, transactions, migrations,
 idempotency keys, and crash-safe commits.
 
 Tables (minimum):
 - schema_migrations
-- runs — status, seed, config JSON, curriculum_level, model_version, created/updated
-- candidates — stable_id, canonical AST JSON, structural_hash, kind
+- runs: status, seed, config JSON, curriculum_level, model_version, created/updated
+- candidates: stable_id, canonical AST JSON, structural_hash, kind
   (hypothesis|theorem|definition|expression), provenance, current_status, timestamps
-- attempts — candidate_id, role, model_version, prompt_hash, raw_response,
+- attempts: candidate_id, role, model_version, prompt_hash, raw_response,
   proof_artifact / critique_artifact, timings; IMMUTABLE
-- validations — candidate_id, attempt_id, lean_version, toolchain_hash,
+- validations: candidate_id, attempt_id, lean_version, toolchain_hash,
   validation_type (proof|counterexample|check), result, bounded stdout/stderr; IMMUTABLE
-- counterexamples — candidate_id, assignment JSON, instantiated_prop, lean_certificate_id
-- dependencies — from_id, to_id, relation (cites|uses_definition|generalizes|…)
-- queue_jobs — type, priority, state, lease_owner, lease_expiry, retry_count, idempotency_key
-- events — append-only state transitions
-- curriculum_progress — level, windows, metrics, gate_status
-- model_versions — path/hash, adapter_hash, eval_scores, champion/challenger/retired
-- checkpoints — run_id, seq, event_cursor, scheduler_state, rng_state,
+- counterexamples: candidate_id, assignment JSON, instantiated_prop, lean_certificate_id
+- dependencies: from_id, to_id, relation (cites|uses_definition|generalizes|…)
+- queue_jobs: type, priority, state, lease_owner, lease_expiry, retry_count, idempotency_key
+- events: append-only state transitions
+- curriculum_progress: level, windows, metrics, gate_status
+- model_versions: path/hash, adapter_hash, eval_scores, champion/challenger/retired
+- checkpoints: run_id, seq, event_cursor, scheduler_state, rng_state,
   curriculum_state, artifact hashes
 
 A candidate's outcome is DERIVED from accepted validations, not from the model's opinion.
 
-## Phase 2 — pause / resume / checkpoint
+## Phase 2: pause / resume / checkpoint
 
-- Checkpoint every 300 s by default; configurable only in the range 300–600 s.
+- Checkpoint every 300 s by default; configurable only in the range 300-600 s.
 - Also checkpoint on: pause, SIGINT/SIGTERM, curriculum promotion, model promotion.
 - Pause: stop new dequeues, finish or release leases, commit, atomically publish the checkpoint, exit.
 - Resume: integrity check, restore RNG/scheduler, reclaim expired leases, zero duplicate attempts.
@@ -110,7 +110,7 @@ A candidate's outcome is DERIVED from accepted validations, not from the model's
 Trackers: run status, curriculum level, event cursor, queue depths, model version.
 CLI minimum: start | pause | resume | status | replay.
 
-## Phase 3 — queues and workers (so the model is not idle)
+## Phase 3: queues and workers (so the model is not idle)
 
 Bounded queues:
 - propose
@@ -124,10 +124,10 @@ Requirements:
 - priority for jobs that unblock downstream work
 - leases + heartbeats
 - ONE loaded model server; roles multiplexed by request (not 3 full copies in RAM)
-- start: 1 inference worker + 1–2 Lean workers; scale after measurement
+- start: 1 inference worker + 1-2 Lean workers; scale after measurement
 - measure utilization and latency, but do not trade correctness for busyness
 
-## Phase 4 — curriculum: difficulty grows very slowly
+## Phase 4: curriculum: difficulty grows very slowly
 
 Start from the existing concrete Nat generator (stage 1).
 Extend the capabilities of stages 2→6 ONE level at a time.
@@ -169,11 +169,11 @@ Role agreement without Lean is NEVER enough.
 
 A failed gate freezes advancement; it does not rewrite accepted evidence.
 
-## Phase 5 — model strategy on a Mac with 24 GB RAM
+## Phase 5: model strategy on a Mac with 24 GB RAM
 
 Default recommendation:
-- one local 7B–8B instruct/code model, 4-bit quantization (MLX or llama.cpp)
-- context 8K–16K
+- one local 7B-8B instruct/code model, 4-bit quantization (MLX or llama.cpp)
+- context 8K-16K
 - peak process memory < ~18 GB (leave headroom for Lean and macOS)
 - do NOT keep three resident copies of the model
 - 14B 4-bit only as an optional benchmark after measuring latency/RAM
@@ -190,7 +190,7 @@ LoRA / fine-tune ONLY later, offline between runs:
 - challenger vs champion on held-out; rollback on regression
 - every version: hash, eval scores, the ability to retire
 
-## Phase 6 — protection against self-training collapse
+## Phase 6: protection against self-training collapse
 
 - An immutable seed corpus + a held-out benchmark (never in train).
 - Dedup by structural_hash between train and eval.
@@ -200,7 +200,7 @@ LoRA / fine-tune ONLY later, offline between runs:
 - Quarantine if the same candidate looks proved and refuted at once → a system defect.
 - Promote a model/policy only when it improves correctness, solve rate, calibration, diversity, resource use.
 
-## Phase 7 — Lean validation
+## Phase 7: Lean validation
 
 - Pin and store the toolchain (lean/lean-toolchain, hash).
 - Validate candidates separately (one bad file does not spoil the batch).
@@ -208,7 +208,7 @@ LoRA / fine-tune ONLY later, offline between runs:
 - Limits: wall-clock, CPU, process-group kill, output truncate, controlled imports, temp files.
 - reuse theorem_gen.verify where possible; do not build a second ad-hoc runner without a need.
 
-## Phase 8 — CLI and DX
+## Phase 8: CLI and DX
 
 Commands (repo root):
 
@@ -234,7 +234,7 @@ The existing `python3 -m theorem_gen generate` must keep working with no regress
 8. Pause → a valid checkpoint; resume restores the scheduler/RNG.
 9. Expired leases are reclaimed; backpressure bounds the queues.
 10. Under a synthetic load with eligible work: inference/Lean utilization above a threshold
-    (for example ≥80% busy when the queue > 0) — not "zero idle forever".
+    (for example ≥80% busy when the queue > 0): not "zero idle forever".
 11. Curriculum does not advance early or from training metrics alone.
 12. A failed challenger → rollback of the champion.
 13. Replay from recorded outputs with no inference reproduces the outcomes.
@@ -267,7 +267,7 @@ Storing a growing number of records in SQLite is experiment memory, not yet "the
 - three full models in RAM at once
 - online fine-tune during serving
 - a promise to solve an arbitrary hypothesis
-- quietly rewriting the stage 0–8 generator
+- quietly rewriting the stage 0-8 generator
 
 Start from the architecture and red SQLite/pause tests. Do not finish a phase without green tests and a command report.
 ````
@@ -277,13 +277,13 @@ Start from the architecture and red SQLite/pause tests. Do not finish a phase wi
 1. First (optionally) run the audit prompt from `docs/prompts/audit-lean-generator.md`, so the base is known.
 2. Paste the whole `text` block above into a new chat with access to the repository and tools.
 3. Keep the handoff in `.cursor/work/continuous-lean-ai.md`.
-4. Ship curriculum and LoRA only after the gates are green — do not jump to "three personas" before stage 6.
+4. Ship curriculum and LoRA only after the gates are green: do not jump to "three personas" before stage 6.
 
 ## Recommended defaults (when an agent is unsure)
 
 | Question | Choice |
 |----------|--------|
-| How many models in RAM? | 1 × 7–8B 4-bit |
+| How many models in RAM? | 1 × 7-8B 4-bit |
 | Checkpoint interval | 300 s |
 | When do the 3 roles start? | After the curriculum gate that corresponds to stage 6 |
 | When LoRA? | Offline, after a Lean-validated corpus and held-out |

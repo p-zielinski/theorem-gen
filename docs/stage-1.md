@@ -1,4 +1,4 @@
-# Stage 1 — a minimal arithmetic generator
+# Stage 1: a minimal arithmetic generator
 
 > Completed: 2026-10-11
 > Status: done
@@ -18,7 +18,7 @@
 - a separate error classification: `syntax`, `typing`, `proof`, `rejected`, `other`
 - a ready example `lean/TheoremGen/Generated.lean`
 
-Stage 1 itself did not add variables, quantifiers, assumptions, a dependency registry, or hypothesis generation. Those arrived in stages 2–8 and do not change the default generator of concrete theorems.
+Stage 1 itself did not add variables, quantifiers, assumptions, a dependency registry, or hypothesis generation. Those arrived in stages 2-8 and do not change the default generator of concrete theorems.
 
 ## 2. TDD path
 
@@ -103,7 +103,7 @@ The IDE reports no linter errors. `compileall` and `git diff --check` exit 0.
 
 ## 6. Known limits
 
-- `generate` builds only concrete sentences about `Nat`; variables and quantifiers are in the stage 2–8 modules
+- `generate` builds only concrete sentences about `Nat`; variables and quantifiers are in the stage 2-8 modules
 - no Mathlib; stage 1 uses the Lean prelude
 - the LCG uses modulo in `randint`, so the distribution can be slightly skewed, but it is deterministic
 - on Darwin/Python 3.9 setting `RLIMIT_AS` does not work; the timeout and `RLIMIT_CPU` do. The CPU limit is a Unix mechanism.
@@ -119,4 +119,4 @@ An independent audit found no critical or high defects. During the final verific
 
 ## 8. Next step
 
-When stage 1 closed, the next step was stage 2. It was built later. The current state of stages 2–8 is in `docs/stage-2.md` … `docs/stage-8.md`.
+When stage 1 closed, the next step was stage 2. It was built later. The current state of stages 2-8 is in `docs/stage-2.md` … `docs/stage-8.md`.

@@ -1,6 +1,6 @@
-# Prompt: independent audit of the Lean 4 generator (stages 0–8)
+# Prompt: independent audit of the Lean 4 generator (stages 0-8)
 
-Copy the whole block below (from `You are an independent…` through the end of the block) as the full instruction for an agent or a model. Do not trust "done" statuses in the documentation — require evidence from the code, the tests, and real Lean.
+Copy the whole block below (from `You are an independent…` through the end of the block) as the full instruction for an agent or a model. Do not trust "done" statuses in the documentation: require evidence from the code, the tests, and real Lean.
 
 Note for Markdown authors: the block is in a `text` fence of four backticks, so inner command examples do not cut copy-paste.
 
@@ -9,7 +9,7 @@ You are an independent auditor of software engineering and formal verification.
 Audit the project in the current repository directory (the root with
 docs/, theorem_gen/, tests/, lean/). Do not assume an absolute user path.
 
-Goal: check whether stages 0–8 of the Lean 4 theorem generator are actually
+Goal: check whether stages 0-8 of the Lean 4 theorem generator are actually
 implemented, tested, and behaving according to the criteria in docs/stages.md.
 
 Scope: AUDIT ONLY. Do not implement new features and do not "fix along the way".
@@ -45,7 +45,7 @@ From the repository root:
     export PATH="$ELAN_HOME/bin:$PATH"
 
     # Required: Lean 4.34.1 and Lake (see lean/lean-toolchain and README.md).
-    # If the toolchain is missing — install it locally as in the README, without changing the user's PATH.
+    # If the toolchain is missing: install it locally as in the README, without changing the user's PATH.
     # Without lake, an audit of the Lean stages is INCOMPLETE.
 
     python3 -m unittest discover -s tests -v
@@ -84,9 +84,9 @@ Optional faster slices:
     python3 -m unittest tests.test_stage2 tests.test_stage3 tests.test_stage4 tests.test_stage5 tests.test_stage6 tests.test_stage7 tests.test_stage8 -v
     python3 -m unittest tests.test_lean_integration -v
 
-## Stage map — what you must check
+## Stage map: what you must check
 
-### Stage 0 — analysis
+### Stage 0: analysis
 Sources: docs/stage-0.md, docs/architecture.md, docs/stages.md, lean/lean-toolchain.
 Check:
 - Python generates the AST/export/process; Lean is the only judge of a proof; there is no Lean parser in Python.
@@ -94,7 +94,7 @@ Check:
 - The status contract in theorem_gen/verify.py: proved|failed|timeout|unavailable and failure_class.
 - The module table in architecture.md matches the files in theorem_gen/.
 
-### Stage 1 — concrete arithmetic
+### Stage 1: concrete arithmetic
 Code: theorem_gen/{rng,expr,config,theorem,generate,export_lean,verify,__main__}.py
 Tests: tests/test_{rng,expr,generate,export,verify,cli,lean_integration}.py
 Check:
@@ -107,7 +107,7 @@ Check:
 - sorry at exit 0 is not proved; timeout/signal is not false
 - golden file Generated.lean; CLI --verify; lake build
 
-### Stage 2 — variables and general theorems
+### Stage 2: variables and general theorems
 Code: theorem_gen/general.py, export_lean.py, theorem.py
 Tests: tests/test_stage2.py, test_lean_integration.py
 Check:
@@ -117,7 +117,7 @@ Check:
 - expression: #check, no :=, claimed_true False, verify_theorems does not mark proved without a proof
 - Lean accepts every schema that has a proof (except open_double_eq)
 
-### Stage 3 — a wider AST
+### Stage 3: a wider AST
 Code: theorem_gen/expr.py, export_lean.py
 Tests: tests/test_stage3.py, test_lean_integration.py
 Check:
@@ -126,7 +126,7 @@ Check:
 - Lean: succ, Int decide/neg; an undeclared atom → failed
 - the concrete generator still does not draw these constructions in DEFAULT_RULES
 
-### Stage 4 — registry and dependencies
+### Stage 4: registry and dependencies
 Code: theorem_gen/registry.py, definitions.py
 Tests: tests/test_stage4.py
 Check:
@@ -136,7 +136,7 @@ Check:
 - citation/use_definition → discovered=False; define → discovered=True
 - Lean=N/A for the registry itself (in-memory)
 
-### Stage 5 — complexity
+### Stage 5: complexity
 Code: theorem_gen/complexity.py, config.py, generate.py, general.py
 Tests: tests/test_stage5.py
 Check six measures: ast_size, depth, variables, operators, dependencies, definitions.
@@ -146,14 +146,14 @@ Check six measures: ast_size, depth, variables, operators, dependencies, definit
 - explore() does NOT read complexity_bounds
 - impossible bounds → GenerationError, not a mathematical verdict
 
-### Stage 6 — definitions
+### Stage 6: definitions
 Code: theorem_gen/definitions.py, export_lean.export_library
 Tests: tests/test_stage6.py, test_lean_integration.py
 Check validate_definition, double, theorem_about_double, supporting_definitions,
 rejection of a free var / type mismatch / recursion / duplicate param,
 Lean: def double + gen_double_zero := rfl → proved.
 
-### Stage 7 — hypotheses
+### Stage 7: hypotheses
 Code: theorem_gen/hypothesis.py
 Tests: tests/test_stage7.py, test_verify.py, test_lean_integration.py
 Check statuses: proved, refuted, unresolved, invalid_syntax, invalid_type.
@@ -163,7 +163,7 @@ Check statuses: proved, refuted, unresolved, invalid_syntax, invalid_type.
 - decide "proved that the proposition … is false" → failure_class proof
 - limit_repetition and diversity_metrics
 
-### Stage 8 — open exploration
+### Stage 8: open exploration
 Code: theorem_gen/explore.py
 Tests: tests/test_stage8.py, test_lean_integration.py
 Check explore(seed, count):
@@ -180,13 +180,13 @@ Check explore(seed, count):
 - discovered=False for cite / use_definition.
 - No word sorry in correct generator exports.
 - Dual loops generate.py vs general.py: compare unique, max_attempts, complexity.
-- Dual _within_complexity: concrete vs general — both paths must have tests.
+- Dual _within_complexity: concrete vs general: both paths must have tests.
 
 ## Audit report format
 
-For each stage 0–8:
+For each stage 0-8:
 
-### Stage N — <name>
+### Stage N: <name>
 - Verdict: met | met_with_limitations | not_met | incomplete_without_lean
 - Map (required table; Lean=N/A only when the stage does not require Lean, for example 0/4):
 

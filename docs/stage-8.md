@@ -1,4 +1,4 @@
-# Stage 8 — open exploration
+# Stage 8: open exploration
 
 > Completed: 2026-10-11
 > Status: done
@@ -27,7 +27,7 @@ Seed 1 and count 4 give, in this order: `proved`, `refuted`, `no_proof`, `unprov
 
 ## 3. Commands actually run
 
-From the repository root, after stages 2–8:
+From the repository root, after stages 2-8:
 
 ```sh
 python3 -m unittest discover -s tests -v
@@ -68,12 +68,12 @@ explore_0003 unprovable_in_fragment witness=() deps=()
 
 ## 5. Limits
 
-Exploration has four templates, not an arbitrary space of sentences. The status `proved` in an exploration result means a registered lemma matches; the theorem in the export still waits for Lean. That is not `claimed_true(theorem)` — see also the table in `README.md`. The system does not promise to decide sentences outside these templates. Lack of a proof, falsehood, and unprovability in the fragment remain three different results.
+Exploration has four templates, not an arbitrary space of sentences. The status `proved` in an exploration result means a registered lemma matches; the theorem in the export still waits for Lean. That is not `claimed_true(theorem)`: see also the table in `README.md`. The system does not promise to decide sentences outside these templates. Lack of a proof, falsehood, and unprovability in the fragment remain three different results.
 
 ## 6. Criteria
 
-The stage 8 criterion is met. After stages 2–7 the system creates sentences it does not always decide itself, and it does not identify lack of a proof with falsehood, or with unprovability outside the registered fragment.
+The stage 8 criterion is met. After stages 2-7 the system creates sentences it does not always decide itself, and it does not identify lack of a proof with falsehood, or with unprovability outside the registered fragment.
 
 ## 7. Next step
 
-Stages 0–8 are closed. Further work, if any, would be new constructions or a durable registry, not closing this series.
+Stages 0-8 are closed. Further work, if any, would be new constructions or a durable registry, not closing this series.

@@ -1,4 +1,4 @@
-# Stage 4 — registry and dependencies
+# Stage 4: registry and dependencies
 
 > Completed: 2026-10-11
 > Status: done

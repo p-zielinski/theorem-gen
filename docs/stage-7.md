@@ -1,4 +1,4 @@
-# Stage 7 — hypotheses
+# Stage 7: hypotheses
 
 > Completed: 2026-10-11
 > Status: done

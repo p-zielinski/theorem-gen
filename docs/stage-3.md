@@ -1,4 +1,4 @@
-# Stage 3 — a wider AST
+# Stage 3: a wider AST
 
 > Completed: 2026-10-11
 > Status: done

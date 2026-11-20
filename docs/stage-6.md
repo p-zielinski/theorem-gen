@@ -1,4 +1,4 @@
-# Stage 6 — definitions
+# Stage 6: definitions
 
 > Completed: 2026-10-11
 > Status: done
