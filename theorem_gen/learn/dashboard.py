@@ -359,6 +359,8 @@ def snapshot(db_path: Path, run_id: str, *, now: Optional[float] = None) -> dict
                     "repair_ply": int(row["repair_ply"]) if "repair_ply" in names else 0,
                     "repair_left": int(row["repair_left"]) if "repair_left" in names else 0,
                     "repair_at": int(row["repair_at"]) if "repair_at" in names else 0,
+                    "repair_prefix": row["repair_prefix"] if "repair_prefix" in names else "",
+                    "hole_from": row["hole_from"] if "hole_from" in names else "",
                 }
         unread = unread_in_prefix(conn, run_id, cursor_id)
         plan = freedom_plan(_judged_dispositions(conn, run_id))
@@ -511,6 +513,14 @@ _REPAIR_PHASE = {
     "done": "200 cycles are in. The model has stopped writing.",
 }
 
+_HOLE_PHASE = {
+    "train": "Training on one page. The next cycle breaks one character of a proved sentence.",
+    "draw": "Guessing the broken character. Twenty samples, then one argmax.",
+    "wait": "Waiting until Lean has judged this character.",
+    "teach": "Teaching a character Lean just accepted.",
+    "done": "200 cycles are in. The model has stopped guessing.",
+}
+
 
 def _probe_summary(conn, run_id: str, lm) -> dict:
     empty = {
@@ -525,13 +535,20 @@ def _probe_summary(conn, run_id: str, lm) -> dict:
         "draw_left": 0,
         "greedy": "Not drawn yet",
         "repair": False,
+        "hole": False,
         "furthest": 0,
         "repair_n": 0,
         "repair_left": 0,
+        "broken": "",
+        "hole_index": 0,
+        "hole_from": "",
+        "restored": 0,
+        "changed": 0,
     }
     if not lm or not lm.get("probe"):
         return empty
     repair = lm.get("probe_task") == "repair"
+    hole = lm.get("probe_task") == "hole"
     cycle = int(lm.get("probe_cycle") or 0)
     phase = lm.get("probe_phase") or "train"
     done = phase == "done"
@@ -542,11 +559,17 @@ def _probe_summary(conn, run_id: str, lm) -> dict:
     greedy = "Not drawn yet"
     furthest = 0
     repair_n = 0
-    openings = "AND repair_ply=0" if repair and "repair_ply" in _attempt_columns(conn) else ""
-    if _table(conn, "model_attempts") and "decoder" in _attempt_columns(conn):
+    restored = 0
+    changed = 0
+    names = _attempt_columns(conn)
+    openings = "AND repair_ply=0" if repair and "repair_ply" in names else ""
+    distinct_expr = "COUNT(DISTINCT equation)"
+    if hole and "hole_char" in names:
+        distinct_expr = "COUNT(DISTINCT CASE WHEN hole_char != '' THEN hole_char END)"
+    if _table(conn, "model_attempts") and "decoder" in names:
         row = conn.execute(
             f"""
-            SELECT COUNT(*) AS n, COUNT(DISTINCT equation) AS distinct_n,
+            SELECT COUNT(*) AS n, {distinct_expr} AS distinct_n,
                    SUM(CASE WHEN disposition='proved' THEN 1 ELSE 0 END) AS accepted_n
             FROM model_attempts
             WHERE run_id=? AND cycle=? AND decoder='sample' {openings}
@@ -556,7 +579,20 @@ def _probe_summary(conn, run_id: str, lm) -> dict:
         sample_n = int(row["n"] or 0)
         distinct = int(row["distinct_n"] or 0)
         accepted = int(row["accepted_n"] or 0)
-        if repair and "repair_ply" in _attempt_columns(conn):
+        if hole and "hole_char" in names and "hole_from" in names:
+            split = conn.execute(
+                """
+                SELECT
+                  SUM(CASE WHEN disposition='proved' AND hole_char != '' AND hole_char = hole_from THEN 1 ELSE 0 END) AS restored_n,
+                  SUM(CASE WHEN disposition='proved' AND hole_char != '' AND hole_char != hole_from THEN 1 ELSE 0 END) AS changed_n
+                FROM model_attempts
+                WHERE run_id=? AND cycle=? AND decoder='sample'
+                """,
+                (run_id, cycle),
+            ).fetchone()
+            restored = int(split["restored_n"] or 0)
+            changed = int(split["changed_n"] or 0)
+        if repair and "repair_ply" in names:
             extra = conn.execute(
                 """
                 SELECT COUNT(*) AS n, MAX(error_at) AS furthest
@@ -586,21 +622,33 @@ def _probe_summary(conn, run_id: str, lm) -> dict:
         ).fetchone()
         if greedy_row is not None:
             greedy = _VERDICT.get(greedy_row["disposition"], greedy_row["disposition"])
+    if hole:
+        labels = _HOLE_PHASE
+    elif repair:
+        labels = _REPAIR_PHASE
+    else:
+        labels = _PHASE
     return {
         "on": True,
         "shown": shown,
         "limit": 200,
         "phase": phase,
-        "phase_label": (_REPAIR_PHASE if repair else _PHASE).get(phase, phase),
+        "phase_label": labels.get(phase, phase),
         "distinct": distinct,
         "sample_n": sample_n,
         "accepted": accepted,
         "draw_left": int(lm.get("probe_draw_left") or 0),
         "greedy": greedy,
         "repair": repair,
+        "hole": hole,
         "furthest": furthest,
         "repair_n": repair_n,
         "repair_left": int(lm.get("repair_left") or 0),
+        "broken": visible_text(lm.get("repair_prefix") or "", 48),
+        "hole_index": int(lm.get("repair_at") or 0),
+        "hole_from": visible_text(lm.get("hole_from") or "", 4),
+        "restored": restored,
+        "changed": changed,
     }
 
 
@@ -638,6 +686,8 @@ def _attempt_view(row, *, limit: int) -> dict:
     repair = row["repair_ply"] if "repair_ply" in names else None
     cycle = row["cycle"] if "cycle" in names else None
     decoder = row["decoder"] if "decoder" in names else None
+    hole_char = row["hole_char"] if "hole_char" in names else ""
+    hole_from = row["hole_from"] if "hole_from" in names else ""
     return {
         "equation": visible_text(raw, limit),
         "disposition": row["disposition"] if "disposition" in names else "proved",
@@ -649,6 +699,8 @@ def _attempt_view(row, *, limit: int) -> dict:
         "repair_ply": None if repair is None else int(repair),
         "cycle": None if cycle is None else int(cycle),
         "decoder": decoder,
+        "hole_char": hole_char or "",
+        "hole_from": hole_from or "",
     }
 
 
@@ -684,9 +736,12 @@ def _accepted_formulas(conn, run_id: str) -> list:
     repair = "repair_ply" if "repair_ply" in names else "NULL AS repair_ply"
     cycle = "cycle" if "cycle" in names else "NULL AS cycle"
     decoder = "decoder" if "decoder" in names else "NULL AS decoder"
+    hole_char = "hole_char" if "hole_char" in names else "'' AS hole_char"
+    hole_from = "hole_from" if "hole_from" in names else "'' AS hole_from"
     rows = conn.execute(
         f"""
-        SELECT equation, {step}, {loss}, {depth}, {operators}, {size}, {repair}, {cycle}, {decoder}
+        SELECT equation, {step}, {loss}, {depth}, {operators}, {size}, {repair}, {cycle}, {decoder},
+               {hole_char}, {hole_from}
         FROM model_attempts
         WHERE run_id=? AND disposition='proved'
         ORDER BY id DESC
@@ -933,7 +988,7 @@ _PAGE = """<!DOCTYPE html>
   <div class="card"><span>Epoch</span><b id="epoch">—</b><em>How many times the first read has walked the whole pile. 0 means that walk is not finished.</em></div>
   <div class="card"><span>New material</span><b id="unread">—</b><em id="unread-hint">Accepted sentences the first read has not reached. Above 128, the generator opens no new batch.</em></div>
   <div class="card"><span>Read position</span><b id="cursor">—</b><em>How far the first read has walked.</em></div>
-  <div class="card"><span>Replay position</span><b id="replay">—</b><em>Where the repeat pass is. 0 means the next pass starts at the beginning.</em></div>
+  <div class="card"><span>Replay position</span><b id="replay">—</b><em id="replay-hint">Where the repeat pass is. 0 means the next pass starts at the beginning.</em></div>
   <div class="card"><span>Accepted in the pile</span><b id="proved">—</b><em>Sentences Lean has accepted, mostly from the generator. The model studies these.</em></div>
   <div class="card"><span>Still open</span><b id="open">—</b><em>No final status yet. Not a count of the model's waiting tries.</em></div>
   <div class="card"><span>New sentences, last 10 min</span><b id="recent">—</b><em id="recent-hint">How fast the generator is adding work.</em></div>
@@ -994,7 +1049,14 @@ async function refresh() {
     text("probe-distinct", probe.distinct ?? 0);
     text("probe-accepted", probe.accepted ?? 0);
     text("probe-greedy", probe.greedy || "Not drawn yet");
-    if (probe.repair) {
+    if (probe.hole) {
+      text("probe-blurb", "One training step on the generator. Then one character of a sentence proved with rfl is replaced. The model writes one character back. Twenty guesses and one argmax go to Lean. Only an accepted character is taught.");
+      text("probe-distinct-label", "Distinct characters");
+      text("probe-accepted-label", "Accepted characters");
+      text("probe-accepted-hint", (probe.restored || 0) + " restored the original. " + (probe.changed || 0) + " were different and still accepted.");
+      text("probe-greedy-hint", "The single most likely character. Not one of the twenty.");
+      text("probe-draws", "Broken: " + (probe.broken || "(none)") + ". Index " + (probe.hole_index || 0) + ". Original: " + (probe.hole_from || "(none)") + ". " + (probe.sample_n || 0) + " sampled. " + (probe.draw_left || 0) + " still to draw.");
+    } else if (probe.repair) {
       text("probe-blurb", "One training step on the generator, then 20 formulas from this model. Lean judges them. The same model then writes four endings from the formula it read furthest into, and four more only if one of those gets further. No other model writes.");
       text("probe-distinct-label", "Distinct in the 20");
       text("probe-accepted-label", "Accepted");
@@ -1006,7 +1068,7 @@ async function refresh() {
     }
   }
   const statuses = data.statuses || {};
-  text("meta", "State: " + data.status + ". Champion: " + data.model_version + ".");
+  text("meta", "State: " + data.status + ". Curriculum level " + (data.curriculum_level ?? "—") + ". Champion: " + data.model_version + ".");
   const own = data.own || {};
   text("own-accepted", own.accepted ?? 0);
   text("own-accepted-hint", ownHint(own));
@@ -1014,7 +1076,7 @@ async function refresh() {
   const plan = data.freedom || {};
   text("freedom", (plan.level || 0) === 0 ? "Baseline" : ((plan.burst || 40) + " / " + (plan.study || 40)));
   text("freedom-hint", freedomHint(plan));
-  ownList(data.recent_attempts || [], probe.on);
+  ownList(data.recent_attempts || [], probe.on, probe.hole);
   acceptedList(data.accepted_formulas || []);
   drawShare(data.own_series || [], plan.blocks || []);
   drawShape(data.complexity || {});
@@ -1034,6 +1096,9 @@ async function refresh() {
   text("loss", lm.last_loss == null ? "—" : Number(lm.last_loss).toFixed(3));
   text("cursor", lm.cursor_id ?? "—");
   text("replay", lm.replay_id ?? "—");
+  text("replay-hint", probe.on
+    ? "This run does not reread. The model waits until a new proved sentence appears."
+    : "Where the repeat pass is. 0 means the next pass starts at the beginning.");
   text("hold", lm.write_label || "—");
   text("hold-hint", lm.write_hint || "");
   text("weak", lm.weak_streak ?? 0);
@@ -1235,6 +1300,10 @@ function verdictLabel(name) {
   }[name] || name;
 }
 function acceptedWhere(row) {
+  if (row.hole_char) {
+    const restored = row.hole_from && row.hole_char === row.hole_from;
+    return "character " + row.hole_char + (restored ? ", restored" : ", changed");
+  }
   if (row.decoder === "argmax") return "argmax";
   if (row.repair_ply === 1) return "ending";
   if (row.repair_ply === 2) return "second ending";
@@ -1265,13 +1334,15 @@ function acceptedList(rows) {
     list.appendChild(item);
   }
 }
-function ownList(rows, probeOn) {
+function ownList(rows, probeOn, holeOn) {
   const list = document.getElementById("own-list");
   list.replaceChildren();
   if (!rows.length) {
     const item = document.createElement("li");
     item.textContent = probeOn
-      ? "None yet. The hundred starts after the first training step on a proved sentence."
+      ? (holeOn
+        ? "None yet. A guess replaces one character of a proved sentence."
+        : "None yet. The hundred starts after the first training step on a proved sentence.")
       : "None yet. Writing starts after 10 losses in a row under 0.45, or when the loss stays level for 80 updates.";
     list.appendChild(item);
     return;
@@ -1293,7 +1364,7 @@ function unreadHint(unread, data) {
     return "The generator is waiting. No new batch opens until the first read brings this down to " + cap + ". Sentences already queued for Lean can still finish. Replay is not in this number.";
   }
   if (unread === 0) {
-    return "The first read has caught up. Replay continues over sentences already read. A newly proved sentence raises this again. The generator opens a batch while this is " + cap + " or below.";
+    return "The first read has caught up. The model waits for a newly proved sentence and does not reread old ones. The generator opens a batch while this is " + cap + " or below.";
   }
   return "Proved sentences the first read has not reached. The generator opens a new batch while this is " + cap + " or below. Replay is not in this number.";
 }

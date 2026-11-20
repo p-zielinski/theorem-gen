@@ -133,6 +133,7 @@ class Engine:
         lm: bool = False,
         probe: bool = False,
         repair: bool = False,
+        hole: bool = False,
         language=None,
     ) -> None:
         if isinstance(seed, bool) or not isinstance(seed, int):
@@ -144,8 +145,9 @@ class Engine:
         self.store = store
         self.lean_workers = lean_workers
         self.lm_enabled = bool(lm or language is not None)
-        self.repair = bool(repair)
-        self.probe = bool(probe) or self.repair
+        self.hole = bool(hole)
+        self.repair = bool(repair) and not self.hole
+        self.probe = bool(probe) or self.repair or self.hole
         self._language = language
         self.run_id = run_id
         self.seed = seed
@@ -368,6 +370,7 @@ class Engine:
             self.store.path.parent / "lm" / self.run_id,
             probe=self.probe,
             repair=self.repair,
+            hole=self.hole,
         )
 
     def _lm_slice(self) -> None:
@@ -691,6 +694,7 @@ class Engine:
             "refill_when_idle": self.refill_when_idle,
             "probe": self.probe,
             "repair": self.repair,
+            "hole": self.hole,
         }
 
     def _replay_refill(self, config: dict) -> bool:

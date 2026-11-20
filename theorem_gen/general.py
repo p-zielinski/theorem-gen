@@ -82,7 +82,81 @@ def _meta(seed: int, index: int, kind: str, rule: str) -> Metadata:
 
 def _build(rule: str, seed: int, index: int) -> Theorem:
     spec = _SCHEMAS[rule]
-    return Theorem(spec["statement"], spec["proof"], _meta(seed, index, spec["kind"], rule))
+    shifted = _shifted(rule, seed, index)
+    if shifted is None:
+        statement, proof = spec["statement"], spec["proof"]
+    else:
+        statement, proof = shifted
+    return Theorem(statement, proof, _meta(seed, index, spec["kind"], rule))
+
+
+def _offset(seed: int, index: int) -> int:
+    """Zero keeps the canonical statement. Later copies move with the seed."""
+    if index <= 0:
+        return 0
+    return index + abs(int(seed)) % 10000
+
+
+def _shifted(rule: str, seed: int, index: int):
+    """One numeral added to the quantified term. The same lemma still closes it."""
+    offset = _offset(seed, index)
+    if offset <= 0 or rule not in _SHIFTS:
+        return None
+    kind, reference, names = _SHIFTS[rule]
+    terms = [f"({name} + {offset})" for name in names]
+    if kind == "add_zero":
+        body = Compare(
+            "eq",
+            BinOp("add", BinOp("add", _A, NatLit(offset)), NatLit(0)),
+            BinOp("add", _A, NatLit(offset)),
+        )
+        binders = ("a",)
+    elif kind == "zero_add":
+        body = Compare(
+            "eq",
+            BinOp("add", NatLit(0), BinOp("add", _A, NatLit(offset))),
+            BinOp("add", _A, NatLit(offset)),
+        )
+        binders = ("a",)
+    elif kind == "mul_one":
+        body = Compare(
+            "eq",
+            BinOp("mul", BinOp("add", _A, NatLit(offset)), NatLit(1)),
+            BinOp("add", _A, NatLit(offset)),
+        )
+        binders = ("a",)
+    elif kind == "one_mul":
+        body = Compare(
+            "eq",
+            BinOp("mul", NatLit(1), BinOp("add", _A, NatLit(offset))),
+            BinOp("add", _A, NatLit(offset)),
+        )
+        binders = ("a",)
+    elif kind == "le_refl":
+        body = Compare("le", BinOp("add", _A, NatLit(offset)), BinOp("add", _A, NatLit(offset)))
+        binders = ("a",)
+    elif kind == "add_comm":
+        left = BinOp("add", _A, NatLit(offset))
+        right = BinOp("add", _B, NatLit(offset))
+        body = Compare("eq", BinOp("add", left, right), BinOp("add", right, left))
+        binders = ("a", "b")
+    else:
+        left = BinOp("add", _A, NatLit(offset))
+        right = BinOp("add", _B, NatLit(offset))
+        body = Compare("eq", BinOp("mul", left, right), BinOp("mul", right, left))
+        binders = ("a", "b")
+    return _forall(binders, body), Proof("lemma", reference, tuple(terms))
+
+
+_SHIFTS = {
+    "add_zero_all": ("add_zero", "Nat.add_zero", ("a",)),
+    "zero_add_all": ("zero_add", "Nat.zero_add", ("a",)),
+    "mul_one_all": ("mul_one", "Nat.mul_one", ("a",)),
+    "one_mul_all": ("one_mul", "Nat.one_mul", ("a",)),
+    "le_refl_all": ("le_refl", "Nat.le_refl", ("a",)),
+    "add_comm_all": ("add_comm", "Nat.add_comm", ("a", "b")),
+    "mul_comm_all": ("mul_comm", "Nat.mul_comm", ("a", "b")),
+}
 
 
 def _var(name: str) -> Var:

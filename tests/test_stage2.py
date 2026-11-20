@@ -76,8 +76,19 @@ class GeneralGenerationTests(unittest.TestCase):
             generate_general(config),
         )
 
-    def test_unique_rule_cannot_fill_a_second_statement(self):
+    def test_a_later_copy_shifts_the_term_and_the_lemma(self):
         config = GeneratorConfig(seed=1, count=2, rules=("add_zero_all",))
+        first, second = generate_general(config)
+        self.assertNotEqual(first.statement, second.statement)
+        self.assertEqual(
+            export_theorem(second),
+            "theorem gen_s1_0001 (a : Nat) : (((a + 2) + 0) = (a + 2)) := Nat.add_zero (a + 2)",
+        )
+        many = generate_general(GeneratorConfig(seed=1, count=30, rules=("add_zero_all",)))
+        self.assertEqual(len({item.statement for item in many}), 30)
+
+    def test_an_unshifted_rule_cannot_fill_a_second_statement(self):
+        config = GeneratorConfig(seed=1, count=2, rules=("open_double_eq",))
         with self.assertRaises(GenerationError) as caught:
             generate_general(config)
         self.assertIn("produced 1", str(caught.exception))
@@ -96,8 +107,11 @@ class GeneralGenerationTests(unittest.TestCase):
         self.assertIn("not a concrete rule", str(caught.exception))
 
     def test_four_kinds_stay_distinct(self):
-        config = GeneratorConfig(seed=1, count=len(GENERAL_RULES))
-        kinds = {item.metadata.kind for item in generate_general(config)}
+        kinds = {
+            self.one("add_zero_all").metadata.kind,
+            self.one("eq_implies_add_zero").metadata.kind,
+            self.one("open_double_eq").metadata.kind,
+        }
         self.assertEqual(kinds, {"universal", "conditional", "expression"})
         concrete = generate(GeneratorConfig(seed=1, count=1, rules=("add_zero",)))
         self.assertEqual(concrete[0].metadata.kind, "concrete")

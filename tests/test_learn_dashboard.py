@@ -189,6 +189,7 @@ class SnapshotTests(unittest.TestCase):
             self.assertEqual(info["unread"], 129)
             self.assertTrue(info["generator_waiting"])
             self.assertIn("Above 128", _PAGE)
+            self.assertIn("Curriculum level", _PAGE)
             self.assertIn("generator_waiting", _PAGE)
 
     def test_attempt_windows_compare_the_last_two_ten_minute_spans(self):
@@ -463,6 +464,52 @@ class RunningRunTests(unittest.TestCase):
             )
             self.assertEqual(resolve_run_id(engine.store.conn, "run-2"), "run-2")
             self.assertEqual(resolve_run_id(engine.store.conn, None), "run-3")
+            engine.close()
+
+    def test_a_hole_cycle_names_the_broken_character(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = make_engine(tmp, max_steps=0, lm=True, hole=True)
+            engine.bootstrap()
+            now = "1000"
+            engine.store.conn.execute(
+                """
+                INSERT INTO lm_state (
+                  run_id, step, epoch, cursor_id, pass_cursor, sequences,
+                  last_loss, hold, weak_streak, last_error, weights_path, updated_at,
+                  probe, probe_phase, probe_cycle, probe_cycles, probe_task,
+                  repair_at, repair_prefix, hole_from
+                ) VALUES ('run-1', 3, 0, 0, 0, 0, 1.2, 0, 0, NULL, 'weights', ?,
+                  1, 'draw', 0, 0, 'hole', 0, '?+1=2', '1')
+                """,
+                (now,),
+            )
+            engine.store.conn.execute(
+                """
+                INSERT INTO model_attempts (
+                  run_id, equation, equation_hash, origin, disposition, created_at,
+                  decoder, cycle, hole_index, hole_char, hole_from, hole_broken
+                ) VALUES
+                  ('run-1', '1+1=2', 'h1', 'model', 'proved', ?, 'sample', 0, 0, '1', '1', '?+1=2'),
+                  ('run-1', 'Z+1=2', 'h2', 'model', 'proved', ?, 'sample', 0, 0, 'Z', '1', '?+1=2'),
+                  ('run-1', '0+1=2', 'h3', 'model', 'ill_formed', ?, 'sample', 0, 0, '0', '1', '?+1=2')
+                """,
+                (now, now, now),
+            )
+            engine.store.conn.commit()
+            info = snapshot(engine.store.path, "run-1")
+            probe = info["probe"]
+            self.assertTrue(probe["hole"])
+            self.assertFalse(probe["repair"])
+            self.assertEqual(probe["distinct"], 3)
+            self.assertEqual(probe["accepted"], 2)
+            self.assertEqual(probe["restored"], 1)
+            self.assertEqual(probe["changed"], 1)
+            self.assertEqual(probe["hole_index"], 0)
+            self.assertIn("?", probe["broken"])
+            self.assertIn("one character", _PAGE)
+            self.assertIn("does not reread", _PAGE)
+            chars = {row["hole_char"] for row in info["accepted_formulas"]}
+            self.assertEqual(chars, {"1", "Z"})
             engine.close()
 
 

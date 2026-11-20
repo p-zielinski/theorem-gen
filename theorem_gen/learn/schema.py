@@ -20,6 +20,7 @@ MIGRATIONS = (
     (13, "attempt_shape", "013_attempt_shape.sql"),
     (14, "probe", "014_probe.sql"),
     (15, "repair", "015_repair.sql"),
+    (16, "hole", "016_hole.sql"),
 )
 
 

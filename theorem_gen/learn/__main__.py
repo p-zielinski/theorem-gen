@@ -87,6 +87,7 @@ def _run_args(parser) -> None:
     parser.add_argument("--lm", action="store_true")
     parser.add_argument("--probe", action="store_true")
     parser.add_argument("--repair", action="store_true")
+    parser.add_argument("--hole", action="store_true")
 
 
 def _db_args(parser) -> None:
@@ -111,8 +112,13 @@ def _start(store, args) -> int:
         refill_when_idle=True,
         lean_workers=_choose_workers(args),
         lm=bool(getattr(args, "lm", False)),
-        probe=bool(getattr(args, "probe", False) or getattr(args, "repair", False)),
-        repair=bool(getattr(args, "repair", False)),
+        probe=bool(
+            getattr(args, "probe", False)
+            or getattr(args, "repair", False)
+            or getattr(args, "hole", False)
+        ),
+        repair=bool(getattr(args, "repair", False)) and not bool(getattr(args, "hole", False)),
+        hole=bool(getattr(args, "hole", False)),
     )
     with _signals(engine):
         engine.start()
@@ -208,10 +214,16 @@ def _engine_for_existing(store, args, *, max_steps, until_pause: bool = False, r
         probe=bool(
             getattr(args, "probe", False)
             or getattr(args, "repair", False)
+            or getattr(args, "hole", False)
             or config.get("probe")
             or config.get("repair")
+            or config.get("hole")
         ),
-        repair=bool(getattr(args, "repair", False) or config.get("repair")),
+        repair=bool(
+            (getattr(args, "repair", False) or config.get("repair"))
+            and not (getattr(args, "hole", False) or config.get("hole"))
+        ),
+        hole=bool(getattr(args, "hole", False) or config.get("hole")),
     )
 
 

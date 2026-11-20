@@ -16,11 +16,14 @@ import re
 
 DRAW_COUNT = 100
 FORMULA_DRAW = 20
+HOLE_DRAW = 20
 REPAIR_WIDTH = 4
 REPAIR_PLIES = 2
 CYCLE_LIMIT = 200
 TEMPERATURE = 1.0
 TOP_P = 0.9
+HOLE_TRIES = 12
+_BREAKS = ("?", "0", "1", "x", "+")
 
 _LEAN_LOCUS = re.compile(r"\.lean:(\d+):(\d+):")
 
@@ -121,6 +124,44 @@ def formula_progress(source: str, body: str, error_at: int | None) -> int | None
     if error_at <= start or error_at >= end:
         return None
     return error_at - start
+
+
+def break_char(original: str) -> str:
+    """A different character planted in place of `original`."""
+    for choice in _BREAKS:
+        if choice != original:
+            return choice
+    return "0" if original != "0" else "1"
+
+
+def splice_char(body: str, index: int, char: str) -> str:
+    """Body with `index` replaced by one character. Empty when the swap is not allowed."""
+    if not body or not char or index < 0 or index >= len(body):
+        return ""
+    piece = char[0]
+    if piece in "\n\r":
+        return ""
+    return body[:index] + piece + body[index + 1 :]
+
+
+def first_break(body: str, closed, limit: int = HOLE_TRIES) -> tuple:
+    """First one-character swap that `closed` rejects.
+
+    Returns `(index, broken, original)` or an empty tuple when every tried
+    swap still passes, or when there is nothing to break. `closed` is true
+    when `rfl` would accept that body.
+    """
+    if not body or limit < 1:
+        return ()
+    checks = 0
+    for index, original in enumerate(body):
+        if checks >= limit:
+            return ()
+        broken = splice_char(body, index, break_char(original))
+        checks += 1
+        if broken and not closed(broken):
+            return (index, broken, original)
+    return ()
 
 
 def open_repairs(

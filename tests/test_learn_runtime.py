@@ -665,3 +665,16 @@ class RuntimeTests(unittest.TestCase):
         after = restored.store.conn.execute("SELECT COUNT(*) FROM attempts").fetchone()[0]
         self.assertEqual(after, before)
         self.assertGreater(before, 0)
+
+    def test_hole_is_stored_on_the_run(self):
+        import json
+
+        with tempfile.TemporaryDirectory() as tmp:
+            engine = make_engine(tmp, max_steps=0, lm=True, hole=True, repair=True)
+            engine.bootstrap()
+            config = json.loads(engine.store.get_run("run-1")["config_json"])
+            self.assertTrue(config["hole"])
+            self.assertFalse(config["repair"])
+            self.assertTrue(engine.hole)
+            self.assertTrue(engine.probe)
+            engine.close()

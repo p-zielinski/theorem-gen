@@ -21,12 +21,15 @@ from theorem_gen.learn.probe import (
     CYCLE_LIMIT,
     DRAW_COUNT,
     FORMULA_DRAW,
+    HOLE_DRAW,
     TEMPERATURE,
     TOP_P,
+    first_break,
     formula_progress,
     lean_error_at,
     next_draw,
     open_repairs,
+    splice_char,
 )
 from theorem_gen.learn.prefix import is_in_flight, unread_in_prefix
 from theorem_gen.learn.replay import next_replay
@@ -59,6 +62,11 @@ END_TAG = "<|end|>"
 _SPECIALS = ((PROPOSE_TAG, PROPOSE), (PROVE_TAG, PROVE), (END_TAG, END))
 _NAMES = {PROPOSE: PROPOSE_TAG, PROVE: PROVE_TAG, END: END_TAG, PAD: ""}
 BATCH_CANDIDATES = 4
+
+
+def hole_lesson(broken: str, index: int, char: str) -> str:
+    """One accepted replacement. The known original is not a lesson by itself."""
+    return f"{PROPOSE_TAG}\n{broken}\n{index}\n{char}\n{END_TAG}"
 
 
 def theorem_line(source: str) -> str:
@@ -225,7 +233,7 @@ def _source_for(store, run_id: str, candidate) -> str:
 class MiniLMService:
     """One writer-side trainer. A turn writes its own equations, then study resumes."""
 
-    def __init__(self, directory: Path, config=None, probe: bool = False, repair: bool = False) -> None:
+    def __init__(self, directory: Path, config=None, probe: bool = False, repair: bool = False, hole: bool = False) -> None:
         self.directory = Path(directory)
         if config is None:
             from theorem_gen.learn.minilm_model import PRODUCTION
@@ -251,8 +259,9 @@ class MiniLMService:
         self._aligned = False
         self._shapes_ready = False
         self._unbound_checked = False
-        self.repair = bool(repair)
-        self.probe = bool(probe) or self.repair
+        self.hole = bool(hole)
+        self.repair = bool(repair) and not self.hole
+        self.probe = bool(probe) or self.repair or self.hole
         self.phase = "train"
         self.cycle = 0
         self.cycles = 0
@@ -262,6 +271,10 @@ class MiniLMService:
         self.repair_left = 0
         self.repair_at = 0
         self.repair_prefix = ""
+        self.hole_broken = ""
+        self.hole_index = 0
+        self.hole_from = ""
+        self._pending_char = ""
         self.sample_seed = 1
         self._decoder = "argmax"
 
@@ -276,7 +289,7 @@ class MiniLMService:
             self.hold = False
             self.pass_cursor = 0
             self._save_state(engine.store, engine.run_id)
-        if self.probe or self.repair:
+        if self.probe or self.repair or self.hole:
             self.probe = True
             self.sample_seed = int(getattr(engine, "seed", 1)) + int(self.step)
             self._probe_tick(engine)
@@ -449,8 +462,25 @@ class MiniLMService:
         if self.phase == "train":
             outcome = self._train_page(engine, after=self.cursor_id, advance_cursor=True)
             if outcome != "trained":
-                outcome = self._replay(engine)
-            if outcome != "trained":
+                return
+            if self.hole:
+                opened = self._open_hole(engine)
+                if opened is None:
+                    self.phase = "train"
+                    self._save_state(engine.store, engine.run_id)
+                    return
+                if not opened:
+                    self._advance_without_guess(engine)
+                    return
+                self.phase = "draw"
+                self.draw_left = HOLE_DRAW
+                self.greedy_left = 1
+                self._save_state(engine.store, engine.run_id)
+                loss = "—" if self.last_loss is None else f"{self.last_loss:.3f}"
+                print(
+                    f"lm hole cycle={self.cycle + 1} step={self.step} loss={loss} index={self.hole_index}",
+                    flush=True,
+                )
                 return
             self.phase = "draw"
             self.draw_left = FORMULA_DRAW if self.repair else DRAW_COUNT
@@ -473,7 +503,10 @@ class MiniLMService:
                 self.phase = "wait"
                 self._save_state(engine.store, engine.run_id)
                 return
-            self._sample(engine, decoder=decoder)
+            if self.hole:
+                self._guess_hole(engine, decoder)
+            else:
+                self._sample(engine, decoder=decoder)
             if self.draw_left == 0 and self.greedy_left == 0:
                 self.phase = "wait"
             self._save_state(engine.store, engine.run_id)
@@ -519,10 +552,8 @@ class MiniLMService:
             self._save_state(engine.store, engine.run_id)
 
     def _study_finished(self, engine) -> None:
-        """Writing has stopped. Keep reading so the pile ahead of the cursor can fall."""
+        """Writing has stopped. Read a new proved sentence, or wait for one."""
         outcome = self._train_page(engine, after=self.cursor_id, advance_cursor=True)
-        if outcome != "trained":
-            outcome = self._replay(engine)
         if outcome != "trained":
             return
         loss = "—" if self.last_loss is None else f"{self.last_loss:.3f}"
@@ -652,6 +683,29 @@ class MiniLMService:
         )
         if row is None:
             return False
+        if self.hole:
+            detail = engine.store._one(
+                """
+                SELECT hole_broken, hole_index, hole_char FROM model_attempts
+                WHERE id=?
+                """,
+                (row["id"],),
+            )
+            char = "" if detail is None else (detail["hole_char"] or "")
+            if char:
+                doc = hole_lesson(detail["hole_broken"] or "", int(detail["hole_index"] or 0), char)
+                if not overflowing_length([doc], self.config.context):
+                    loss = self._fit([doc])
+                    self.last_loss = loss
+                    self.recent_losses = remember_loss(self.recent_losses, loss)
+                    self.sequences += 1
+                    self.step += 1
+            engine.store.conn.execute(
+                "UPDATE model_attempts SET taught=1 WHERE id=?",
+                (row["id"],),
+            )
+            self._save_state(engine.store, engine.run_id)
+            return True
         candidate = None
         if row["candidate_id"] is not None:
             candidate = engine.store.get_candidate(row["candidate_id"])
@@ -766,6 +820,127 @@ class MiniLMService:
             )
         return "trained" if docs else "idle"
 
+    def _advance_without_guess(self, engine) -> None:
+        """A proved line was found and every tried swap still passed. The cycle is spent."""
+        self.cycles += 1
+        self.cycle += 1
+        if self.cycles >= CYCLE_LIMIT:
+            self.phase = "done"
+            print(f"lm probe done cycles={self.cycles} step={self.step}", flush=True)
+        else:
+            self.phase = "train"
+            print(f"lm hole skip cycle={self.cycle} step={self.step}", flush=True)
+        self._save_state(engine.store, engine.run_id)
+
+    def _open_hole(self, engine):
+        """Arm one broken character. None when no rfl line exists. False when none of the swaps fail."""
+        body = self._next_rfl_body(engine)
+        if not body:
+            return None
+        found = first_break(body, lambda text: self._body_closed(engine, text))
+        if not found:
+            return False
+        index, broken, original = found
+        self.hole_index = index
+        self.hole_broken = broken
+        self.hole_from = original
+        self.repair_at = index
+        self.repair_prefix = broken
+        return True
+
+    def _next_rfl_body(self, engine) -> str:
+        rows = engine.store._all(
+            """
+            SELECT id, stable_id FROM candidates
+            WHERE run_id=? AND current_status='proved' AND held_out=0 AND proof_method='rfl'
+              AND instr(COALESCE(provenance, ''), '"origin": "model"') = 0
+            ORDER BY id
+            """,
+            (engine.run_id,),
+        )
+        if not rows:
+            return ""
+        start = self.cycle % len(rows)
+        ordered = rows[start:] + rows[:start]
+        for row in ordered:
+            candidate = engine.store.get_candidate(int(row["id"]))
+            if candidate is None:
+                continue
+            body = equation_body(theorem_line(_source_for(engine.store, engine.run_id, candidate)))
+            if body and "\n" not in body:
+                return body
+        return ""
+
+    def _body_closed(self, engine, body: str) -> bool:
+        from theorem_gen.learn.validate import validate_source
+
+        source = f"theorem model_eq : {body} := rfl\n"
+        report = validate_source(
+            source,
+            validation_type="proof",
+            project_dir=engine.project_dir,
+            timeout_s=engine.lean_timeout_s,
+            runner=getattr(engine, "runner", None),
+        )
+        return bool(report.get("accepted"))
+
+    def _model_body_known(self, store, run_id: str, digest: str) -> bool:
+        row = store._one(
+            """
+            SELECT id FROM model_attempts
+            WHERE run_id=? AND equation_hash=? AND disposition!='duplicate'
+            LIMIT 1
+            """,
+            (run_id, digest),
+        )
+        return row is not None
+
+    def _one_character(self, token_ids: list, prompt_len: int) -> str:
+        if len(token_ids) <= prompt_len:
+            return ""
+        token = int(token_ids[prompt_len])
+        if token in {END, PAD, PROPOSE, PROVE}:
+            return ""
+        char = decode([token])
+        if len(char) != 1 or char in "\n\r":
+            return ""
+        return char
+
+    def _guess_hole(self, engine, decoder: str) -> str:
+        """Draw one replacement for the planted character."""
+        self._ensure_trainer()
+        self._decoder = decoder
+        self._pending_char = ""
+        prompt = f"{PROPOSE_TAG}\n{self.hole_broken}\n{self.hole_index}\n"
+        encoded, length = encode(prompt, self.config.context)
+        prompt_ids = encoded[:length]
+        temperature = TEMPERATURE if decoder == "sample" else 0.0
+        top_p = TOP_P if decoder == "sample" else 1.0
+        token_ids = self.trainer.complete(
+            list(prompt_ids),
+            max_new=1,
+            temperature=temperature,
+            top_p=top_p,
+        )
+        char = self._one_character(token_ids, len(prompt_ids))
+        if not char:
+            self._record(engine, "", equation_hash(""), "ill_formed", None)
+            return "ill_formed"
+        repaired = splice_char(self.hole_broken, self.hole_index, char)
+        if not repaired:
+            self._record(engine, "", equation_hash(""), "ill_formed", None)
+            return "ill_formed"
+        digest = equation_hash(repaired)
+        self._pending_char = char
+        if self._model_body_known(engine.store, engine.run_id, digest):
+            self._record(engine, repaired, digest, "duplicate", None)
+            self._pending_char = ""
+            return "duplicate"
+        source = f"theorem model_eq : {repaired} := rfl\n"
+        outcome = self._enqueue(engine, repaired, digest, source)
+        self._pending_char = ""
+        return outcome
+
     def _sample(self, engine, decoder: str = "argmax", prompt_ids=None, prefix: str = "") -> str:
         self._ensure_seen(engine.store, engine.run_id)
         self._ensure_trainer()
@@ -846,8 +1021,9 @@ class MiniLMService:
             """
             INSERT INTO model_attempts (
               run_id, equation, equation_hash, origin, disposition, candidate_id, created_at,
-              lm_step, loss, expr_depth, expr_operators, expr_size, decoder, cycle, repair_ply
-            ) VALUES (?, ?, ?, 'model', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              lm_step, loss, expr_depth, expr_operators, expr_size, decoder, cycle, repair_ply,
+              hole_index, hole_char, hole_from, hole_broken
+            ) VALUES (?, ?, ?, 'model', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 engine.run_id,
@@ -864,6 +1040,10 @@ class MiniLMService:
                 self._decoder if self.probe else None,
                 self.cycle if self.probe else None,
                 self.repair_ply if self.repair else 0,
+                self.hole_index if self.hole else None,
+                self._pending_char if self.hole else "",
+                self.hole_from if self.hole else "",
+                self.hole_broken if self.hole else "",
             ),
         )
         if disposition != "queued":
@@ -1131,7 +1311,14 @@ class MiniLMService:
             self.cycles = int(row["probe_cycles"])
             self.draw_left = int(row["probe_draw_left"])
             self.greedy_left = int(row["probe_greedy_left"])
-        if "probe_task" in names and (row["probe_task"] == "repair" or self.repair):
+        if "probe_task" in names and (row["probe_task"] == "hole" or self.hole):
+            self.hole = True
+            self.repair = False
+            self.probe = True
+            self.hole_from = row["hole_from"] if "hole_from" in names else ""
+            self.hole_broken = row["repair_prefix"] or ""
+            self.hole_index = int(row["repair_at"] or 0)
+        elif "probe_task" in names and (row["probe_task"] == "repair" or self.repair):
             self.repair = True
             self.probe = True
             self.repair_ply = int(row["repair_ply"])
@@ -1143,6 +1330,13 @@ class MiniLMService:
     def _keep_replay_behind_the_cursor(self) -> None:
         if self.replay_id > self.cursor_id:
             self.replay_id = self.cursor_id
+
+    def _task_name(self) -> str:
+        if self.hole:
+            return "hole"
+        if self.repair:
+            return "repair"
+        return ""
 
     def _save_state(self, store, run_id: str) -> None:
         now = store.now()
@@ -1156,8 +1350,8 @@ class MiniLMService:
                   last_loss, hold, weak_streak, last_error, weights_path, updated_at,
                   burst_left, study_left, recent_losses, replay_id,
                   probe, probe_phase, probe_cycle, probe_cycles, probe_draw_left, probe_greedy_left,
-                  probe_task, repair_ply, repair_left, repair_at, repair_prefix
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                  probe_task, repair_ply, repair_left, repair_at, repair_prefix, hole_from
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     run_id,
@@ -1182,11 +1376,12 @@ class MiniLMService:
                     self.cycles,
                     self.draw_left,
                     self.greedy_left,
-                    "repair" if self.repair else "",
+                    self._task_name(),
                     self.repair_ply,
                     self.repair_left,
-                    self.repair_at,
-                    self.repair_prefix,
+                    self.hole_index if self.hole else self.repair_at,
+                    self.hole_broken if self.hole else self.repair_prefix,
+                    self.hole_from,
                 ),
             )
             return
@@ -1198,7 +1393,7 @@ class MiniLMService:
                 burst_left=?, study_left=?, recent_losses=?, replay_id=?,
                 probe=?, probe_phase=?, probe_cycle=?, probe_cycles=?,
                 probe_draw_left=?, probe_greedy_left=?,
-                probe_task=?, repair_ply=?, repair_left=?, repair_at=?, repair_prefix=?
+                probe_task=?, repair_ply=?, repair_left=?, repair_at=?, repair_prefix=?, hole_from=?
             WHERE run_id=?
             """,
             (
@@ -1223,11 +1418,12 @@ class MiniLMService:
                 self.cycles,
                 self.draw_left,
                 self.greedy_left,
-                "repair" if self.repair else "",
+                self._task_name(),
                 self.repair_ply,
                 self.repair_left,
-                self.repair_at,
-                self.repair_prefix,
+                self.hole_index if self.hole else self.repair_at,
+                self.hole_broken if self.hole else self.repair_prefix,
+                self.hole_from,
                 run_id,
             ),
         )
